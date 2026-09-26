@@ -36,6 +36,9 @@ export function validateQuestions(raw) {
     if (!Array.isArray(q.tags) || !q.tags.every((t) => typeof t === 'string')) {
       throw new Error(`第 ${i + 1} 题 tags 须为字符串数组`)
     }
+    if (q.subject != null && (typeof q.subject !== 'string' || !q.subject.trim())) {
+      throw new Error(`第 ${i + 1} 题 subject 须为非空字符串`)
+    }
     if (q.solution != null && typeof q.solution !== 'string') {
       throw new Error(`第 ${i + 1} 题 solution 须为字符串`)
     }
@@ -123,10 +126,16 @@ export function validateQuestions(raw) {
       },
       correctAnswer: q.correctAnswer,
       tags: q.tags,
+      ...(typeof q.subject === 'string' && q.subject.trim()
+        ? { subject: q.subject.trim() }
+        : {}),
       ...(q.solution != null && q.solution !== ''
         ? { solution: q.solution }
         : {}),
       ...(guideSteps ? { guideSteps } : {}),
+      ...(q.guidePlanStatus === 'draft' || q.guidePlanStatus === 'approved'
+        ? { guidePlanStatus: q.guidePlanStatus }
+        : {}),
       ...(variant ? { variant } : {}),
     }
   })

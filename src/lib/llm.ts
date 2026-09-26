@@ -1,4 +1,6 @@
 import { getLlmConfig, isLlmConfigured } from '../config'
+import { isDevMode } from './devMode'
+import { randomId } from './id'
 
 export interface ChatTurn {
   role: 'system' | 'user' | 'assistant'
@@ -24,37 +26,107 @@ export class LlmNotConfiguredError extends Error {
   }
 }
 
-/** 临时调试：每次请求打印发给模型的完整上下文 + 完整返回（浏览器 Console） */
-const DEBUG_LLM_CONTEXT = true
+/** 页面调试面板用的一次 LLM 调用记录 */
+export interface LlmTraceEntry {
+  id: string
+  at: string
+  kind: 'stream' | 'chat'
+  phase: 'request' | 'response' | 'error'
+  model: string
+  baseUrl?: string
+  temperature?: number
+  /** 请求：完整 messages；响应：content / reasoning */
+  title: string
+  body: string
+}
+
+const TRACE_LIMIT = 80
+const traces: LlmTraceEntry[] = []
+const listeners = new Set<(entries: LlmTraceEntry[]) => void>()
+
+function notifyTraceListeners() {
+  const snapshot = [...traces]
+  for (const fn of listeners) fn(snapshot)
+}
+
+export function getLlmTraces(): LlmTraceEntry[] {
+  return [...traces]
+}
+
+export function subscribeLlmTraces(fn: (entries: LlmTraceEntry[]) => void): () => void {
+  listeners.add(fn)
+  fn([...traces])
+  return () => {
+    listeners.delete(fn)
+  }
+}
+
+export function clearLlmTraces() {
+  traces.length = 0
+  notifyTraceListeners()
+}
+
+function pushTrace(entry: Omit<LlmTraceEntry, 'id' | 'at'>) {
+  if (!isDevMode()) return
+  traces.push({
+    ...entry,
+    id: randomId(),
+    at: new Date().toISOString(),
+  })
+  while (traces.length > TRACE_LIMIT) traces.shift()
+  notifyTraceListeners()
+}
+
+function formatMessages(messages: ChatTurn[]): string {
+  return messages
+    .map((m, i) => `—— [${i}] ${m.role} (${m.content.length} chars) ——\n${m.content}`)
+    .join('\n\n')
+}
+
+/** 站点模型：只传 Profile-Id，由服务端从 data/llm.json 注入 Key */
+function buildLlmHeaders(cfg: ReturnType<typeof getLlmConfig>): Record<string, string> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  }
+  if (cfg.shared || cfg.id !== 'fallback') {
+    headers['X-LLM-Profile-Id'] = cfg.id
+    return headers
+  }
+  headers['X-LLM-Base-Url'] = cfg.baseUrl
+  if (cfg.apiKey) {
+    headers.Authorization = `Bearer ${cfg.apiKey}`
+  }
+  return headers
+}
 
 function debugLogLlmRequest(
   kind: 'stream' | 'chat',
   messages: ChatTurn[],
   meta: { model: string; baseUrl: string; temperature: number },
 ) {
-  if (!DEBUG_LLM_CONTEXT) return
-  const payload = {
+  if (!isDevMode()) return
+  const body = formatMessages(messages)
+  pushTrace({
     kind,
+    phase: 'request',
     model: meta.model,
     baseUrl: meta.baseUrl,
     temperature: meta.temperature,
-    messageCount: messages.length,
-    messages: messages.map((m, i) => ({
-      index: i,
-      role: m.role,
-      contentLength: m.content.length,
-      content: m.content,
-    })),
-  }
+    title: `→ 输入 · ${kind} · ${messages.length} msgs`,
+    body,
+  })
   console.groupCollapsed(
     `%c[LLM ${kind} →] ${meta.model} · ${messages.length} msgs`,
     'color:#1f6b4a;font-weight:bold',
   )
-  console.log(payload)
-  console.log('—— 按角色展开 ——')
-  for (const m of messages) {
-    console.log(`【${m.role}】\n${m.content}`)
-  }
+  console.log({
+    kind,
+    model: meta.model,
+    baseUrl: meta.baseUrl,
+    temperature: meta.temperature,
+    messages,
+  })
+  console.log(body)
   console.groupEnd()
 }
 
@@ -66,28 +138,34 @@ function debugLogLlmResponse(
     reasoning?: string
     hadReasoningField?: boolean
     rawJson?: unknown
+    error?: string
   },
 ) {
-  if (!DEBUG_LLM_CONTEXT) return
+  if (!isDevMode()) return
+  const parts = [
+    meta.error ? `【error】\n${meta.error}` : '',
+    '【content】',
+    meta.content || '（空）',
+    meta.reasoning ? `\n【reasoning】\n${meta.reasoning}` : '',
+    meta.rawJson !== undefined
+      ? `\n【rawJson】\n${JSON.stringify(meta.rawJson, null, 2)}`
+      : '',
+  ].filter(Boolean)
+  const body = parts.join('\n')
+  pushTrace({
+    kind,
+    phase: meta.error ? 'error' : 'response',
+    model: meta.model,
+    title: meta.error
+      ? `← 错误 · ${kind}`
+      : `← 输出 · ${kind} · ${meta.content.length} chars`,
+    body,
+  })
   console.groupCollapsed(
     `%c[LLM ${kind} ←] ${meta.model} · content ${meta.content.length} chars`,
     'color:#0b57d0;font-weight:bold',
   )
-  console.log('—— 完整 content ——')
-  console.log(meta.content)
-  if (meta.reasoning) {
-    console.log('—— 完整 reasoning ——')
-    console.log(meta.reasoning)
-  }
-  console.log({
-    contentLength: meta.content.length,
-    reasoningLength: meta.reasoning?.length ?? 0,
-    hadReasoningField: meta.hadReasoningField ?? false,
-  })
-  if (meta.rawJson !== undefined) {
-    console.log('—— 原始 JSON 响应 ——')
-    console.log(meta.rawJson)
-  }
+  console.log(body)
   console.groupEnd()
 }
 
@@ -114,29 +192,40 @@ export async function streamChatCompletion(
   })
 
   const url = '/api/llm/chat/completions'
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    'X-LLM-Base-Url': cfg.baseUrl,
-  }
-  if (cfg.apiKey) {
-    headers.Authorization = `Bearer ${cfg.apiKey}`
-  }
+  const headers = buildLlmHeaders(cfg)
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({
+  let response: Response
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        model: cfg.model,
+        messages,
+        stream: true,
+        temperature,
+      }),
+      signal,
+    })
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') throw err
+    debugLogLlmResponse('stream', {
       model: cfg.model,
-      messages,
-      stream: true,
-      temperature,
-    }),
-    signal,
-  })
+      content: '',
+      error: err instanceof Error ? err.message : String(err),
+    })
+    throw err
+  }
 
   if (!response.ok) {
     const errText = await response.text().catch(() => '')
-    throw new Error(`LLM 请求失败 (${response.status}): ${errText || response.statusText}`)
+    const msg = `LLM 请求失败 (${response.status}): ${errText || response.statusText}`
+    debugLogLlmResponse('stream', {
+      model: cfg.model,
+      content: '',
+      error: msg,
+    })
+    throw new Error(msg)
   }
 
   if (!response.body) {
@@ -223,13 +312,7 @@ export async function chatCompletion(
     temperature,
   })
 
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    'X-LLM-Base-Url': cfg.baseUrl,
-  }
-  if (cfg.apiKey) {
-    headers.Authorization = `Bearer ${cfg.apiKey}`
-  }
+  const headers = buildLlmHeaders(cfg)
 
   const response = await fetch('/api/llm/chat/completions', {
     method: 'POST',

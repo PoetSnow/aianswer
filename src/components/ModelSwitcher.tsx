@@ -1,13 +1,14 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ClipboardEvent } from 'react'
 import {
   createEmptyProfile,
   deleteProfile,
   getActiveModelId,
   loadModelProfiles,
   profileFromExternalJson,
-  setActiveModelId,
+  selectActiveModel,
   upsertProfile,
 } from '../lib/llmModels'
+import { ensureServerLlmConfig } from '../lib/serverLlm'
 import type { LlmModelProfile } from '../types'
 
 interface ModelSwitcherProps {
@@ -20,10 +21,15 @@ export default function ModelSwitcher({ disabled, onChange }: ModelSwitcherProps
   const [activeId, setActiveId] = useState('')
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState<LlmModelProfile | null>(null)
+  const [apiKeyDraft, setApiKeyDraft] = useState('')
+  const [hadApiKey, setHadApiKey] = useState(false)
+  const [replacingKey, setReplacingKey] = useState(false)
   const [importText, setImportText] = useState('')
   const [formError, setFormError] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
 
-  function refresh() {
+  async function refresh() {
+    await ensureServerLlmConfig()
     const list = loadModelProfiles()
     const id = getActiveModelId(list)
     setProfiles(list)
@@ -32,21 +38,52 @@ export default function ModelSwitcher({ disabled, onChange }: ModelSwitcherProps
   }
 
   useEffect(() => {
-    refresh()
+    void refresh()
   }, [])
 
   const active = profiles.find((p) => p.id === activeId) ?? profiles[0]
 
-  function handleSelect(id: string) {
-    setActiveModelId(id)
-    setActiveId(id)
-    const list = loadModelProfiles()
-    onChange?.(list.find((p) => p.id === id) ?? null)
+  const importPlaceholder = (() => {
+    const sample = profiles[0]
+    if (sample) {
+      const endpoint = sample.baseUrl.replace(/\/v1\/?$/, '')
+      return JSON.stringify(
+        {
+          Code: sample.id,
+          Name: sample.name || sample.model,
+          Endpoint: endpoint,
+          ModelName: sample.model,
+          ApiKey: '',
+          Temperature: sample.temperature,
+          ChatCompletionsPath: '/v1/chat/completions',
+        },
+        null,
+        2,
+      )
+    }
+    return `{\n  "Code": "",\n  "Name": "",\n  "Endpoint": "",\n  "ModelName": "",\n  "ApiKey": "",\n  "Temperature": 0.7,\n  "ChatCompletionsPath": "/v1/chat/completions"\n}`
+  })()
+
+  async function handleSelect(id: string) {
+    try {
+      setSaving(true)
+      const list = await selectActiveModel(id)
+      setProfiles(list)
+      setActiveId(id)
+      onChange?.(list.find((p) => p.id === id) ?? null)
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : '切换失败')
+    } finally {
+      setSaving(false)
+    }
   }
 
   function openNew() {
     setFormError(null)
     setImportText('')
+    setApiKeyDraft('')
+    setHadApiKey(false)
+    setReplacingKey(false)
     setEditing(createEmptyProfile())
     setOpen(true)
   }
@@ -54,37 +91,65 @@ export default function ModelSwitcher({ disabled, onChange }: ModelSwitcherProps
   function openEdit(p: LlmModelProfile) {
     setFormError(null)
     setImportText('')
-    setEditing({ ...p })
+    setHadApiKey(Boolean(p.hasApiKey) || Boolean(p.apiKey?.trim()))
+    setReplacingKey(false)
+    setApiKeyDraft('')
+    // 永不把真实 apiKey 放进表单，避免显示 / 复制
+    setEditing({ ...p, apiKey: '' })
     setOpen(true)
   }
 
-  function handleSave() {
+  async function handleSave() {
     if (!editing) return
     if (!editing.baseUrl.trim() || !editing.model.trim()) {
       setFormError('请填写 Base URL 与 Model 名称')
       return
     }
-    const list = upsertProfile(editing)
-    setProfiles(list)
-    if (!activeId || !list.some((p) => p.id === activeId)) {
-      setActiveModelId(editing.id)
-      setActiveId(editing.id)
+    // 已有 Key 且未点「更换」：传空字符串，服务端保留原 Key
+    const nextKey =
+      hadApiKey && !replacingKey ? '' : apiKeyDraft.trim()
+    const toSave: LlmModelProfile = {
+      ...editing,
+      apiKey: nextKey,
+      shared: true,
     }
-    onChange?.(list.find((p) => p.id === getActiveModelId(list)) ?? null)
-    setOpen(false)
-    setEditing(null)
+    try {
+      setSaving(true)
+      setFormError(null)
+      const list = await upsertProfile(toSave)
+      setProfiles(list)
+      const id = getActiveModelId(list)
+      setActiveId(id)
+      onChange?.(list.find((p) => p.id === id) ?? null)
+      setOpen(false)
+      setEditing(null)
+      setApiKeyDraft('')
+      setReplacingKey(false)
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : '保存失败')
+    } finally {
+      setSaving(false)
+    }
   }
 
-  function handleDelete(id: string) {
-    if (!confirm('确定删除该模型配置？')) return
-    const list = deleteProfile(id)
-    setProfiles(list)
-    const nextId = getActiveModelId(list)
-    setActiveId(nextId)
-    onChange?.(list.find((p) => p.id === nextId) ?? null)
-    if (editing?.id === id) {
-      setEditing(null)
-      setOpen(false)
+  async function handleDelete(id: string) {
+    if (!confirm('确定删除该模型？将从服务器 data/llm.json 移除。')) return
+    try {
+      setSaving(true)
+      const list = await deleteProfile(id)
+      setProfiles(list)
+      const nextId = getActiveModelId(list)
+      setActiveId(nextId)
+      onChange?.(list.find((p) => p.id === nextId) ?? null)
+      if (editing?.id === id) {
+        setEditing(null)
+        setOpen(false)
+        setApiKeyDraft('')
+      }
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : '删除失败')
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -92,14 +157,26 @@ export default function ModelSwitcher({ disabled, onChange }: ModelSwitcherProps
     try {
       const parsed = JSON.parse(importText) as unknown
       const profile = profileFromExternalJson(parsed)
+      const importedKey = profile.apiKey?.trim() ?? ''
+      setHadApiKey(Boolean(importedKey) || hadApiKey)
+      if (importedKey) {
+        setReplacingKey(true)
+        setApiKeyDraft(importedKey)
+      }
       setEditing((prev) => ({
         ...profile,
-        id: prev?.id && prev.id !== 'env-default' ? prev.id : profile.id,
+        apiKey: '',
+        shared: true,
+        id: prev?.id && !prev.id.startsWith('server-') ? prev.id : profile.id,
       }))
       setFormError(null)
     } catch (err) {
       setFormError(err instanceof Error ? err.message : 'JSON 解析失败')
     }
+  }
+
+  function blockKeyCopy(e: ClipboardEvent) {
+    e.preventDefault()
   }
 
   return (
@@ -108,24 +185,24 @@ export default function ModelSwitcher({ disabled, onChange }: ModelSwitcherProps
         <span className="muted">模型</span>
         <select
           value={active?.id ?? ''}
-          disabled={disabled || profiles.length === 0}
-          onChange={(e) => handleSelect(e.target.value)}
+          disabled={disabled || saving || profiles.length === 0}
+          onChange={(e) => void handleSelect(e.target.value)}
           aria-label="切换模型"
         >
           {profiles.map((p) => (
             <option key={p.id} value={p.id}>
               {p.name || p.model}
-              {!p.apiKey ? '（无 Key）' : ''}
+              {p.hasApiKey ? '' : '（无 Key）'}
             </option>
           ))}
         </select>
-        <button type="button" className="ghost" disabled={disabled} onClick={openNew}>
+        <button type="button" className="ghost" disabled={disabled || saving} onClick={openNew}>
           添加
         </button>
         <button
           type="button"
           className="ghost"
-          disabled={disabled || !active}
+          disabled={disabled || saving || !active}
           onClick={() => active && openEdit(active)}
         >
           编辑
@@ -148,8 +225,7 @@ export default function ModelSwitcher({ disabled, onChange }: ModelSwitcherProps
             </button>
           </div>
           <p className="hint">
-            配置保存在本机浏览器。内网 vLLM 可留空 API Key。请求经本地{' '}
-            <code>/api/llm</code> 代理，避免 CORS。
+            保存后写入服务器 <code>data/llm.json</code>，全站共用。已存 Key 永不回显，不可复制。
           </p>
 
           <label className="field">
@@ -157,7 +233,7 @@ export default function ModelSwitcher({ disabled, onChange }: ModelSwitcherProps
             <input
               value={editing.name}
               onChange={(e) => setEditing({ ...editing, name: e.target.value })}
-              placeholder="内网 Qwen …"
+              placeholder={active?.name || '名称'}
             />
           </label>
           <label className="field">
@@ -165,7 +241,7 @@ export default function ModelSwitcher({ disabled, onChange }: ModelSwitcherProps
             <input
               value={editing.baseUrl}
               onChange={(e) => setEditing({ ...editing, baseUrl: e.target.value })}
-              placeholder="http://61.144.189.71:8066/v1"
+              placeholder={active?.baseUrl || 'https://…/v1'}
             />
           </label>
           <label className="field">
@@ -173,18 +249,52 @@ export default function ModelSwitcher({ disabled, onChange }: ModelSwitcherProps
             <input
               value={editing.model}
               onChange={(e) => setEditing({ ...editing, model: e.target.value })}
-              placeholder="Qwen/Qwen2.5-3B-Instruct"
+              placeholder={active?.model || 'model-id'}
             />
           </label>
           <label className="field">
             <span>API Key（可选）</span>
-            <input
-              type="password"
-              autoComplete="off"
-              value={editing.apiKey}
-              onChange={(e) => setEditing({ ...editing, apiKey: e.target.value })}
-              placeholder="本地模型可留空"
-            />
+            {hadApiKey && !replacingKey ? (
+              <div className="row gap wrap" style={{ alignItems: 'center' }}>
+                <span className="muted" style={{ fontSize: '0.9rem', userSelect: 'none' }}>
+                  已保存在服务器（不可查看 / 复制 / 粘贴原文）
+                </span>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => {
+                    setReplacingKey(true)
+                    setApiKeyDraft('')
+                  }}
+                >
+                  更换 Key
+                </button>
+              </div>
+            ) : (
+              <input
+                type="password"
+                autoComplete="new-password"
+                spellCheck={false}
+                value={apiKeyDraft}
+                onChange={(e) => setApiKeyDraft(e.target.value)}
+                onCopy={blockKeyCopy}
+                onCut={blockKeyCopy}
+                placeholder={hadApiKey ? '粘贴或输入新 Key（保存后替换）' : '可粘贴；本地模型可留空'}
+              />
+            )}
+            {hadApiKey && replacingKey ? (
+              <button
+                type="button"
+                className="ghost"
+                style={{ marginTop: 4 }}
+                onClick={() => {
+                  setReplacingKey(false)
+                  setApiKeyDraft('')
+                }}
+              >
+                取消更换（保留原 Key）
+              </button>
+            ) : null}
           </label>
           <label className="field inline">
             <span>Temperature</span>
@@ -210,7 +320,7 @@ export default function ModelSwitcher({ disabled, onChange }: ModelSwitcherProps
               rows={8}
               value={importText}
               onChange={(e) => setImportText(e.target.value)}
-              placeholder={`{\n  "Code": "local",\n  "Name": "内网 Qwen",\n  "Endpoint": "http://61.144.189.71:8066",\n  "ModelName": "Qwen/Qwen2.5-3B-Instruct",\n  "ApiKey": "",\n  "Temperature": 0.1,\n  "ChatCompletionsPath": "/v1/chat/completions"\n}`}
+              placeholder={importPlaceholder}
             />
             <button type="button" className="ghost" onClick={handleImportJson}>
               解析并填入表单
@@ -224,11 +334,16 @@ export default function ModelSwitcher({ disabled, onChange }: ModelSwitcherProps
           )}
 
           <div className="row gap wrap">
-            <button type="button" className="primary" onClick={handleSave}>
-              保存
+            <button type="button" className="primary" disabled={saving} onClick={() => void handleSave()}>
+              {saving ? '保存中…' : '保存到服务器'}
             </button>
-            {profiles.some((p) => p.id === editing.id) && editing.id !== 'env-default' && (
-              <button type="button" className="danger" onClick={() => handleDelete(editing.id)}>
+            {profiles.some((p) => p.id === editing.id) && (
+              <button
+                type="button"
+                className="danger"
+                disabled={saving}
+                onClick={() => void handleDelete(editing.id)}
+              >
                 删除
               </button>
             )}
@@ -241,7 +356,7 @@ export default function ModelSwitcher({ disabled, onChange }: ModelSwitcherProps
                   <button
                     type="button"
                     className={`text-btn ${p.id === activeId ? 'active-model' : ''}`}
-                    onClick={() => handleSelect(p.id)}
+                    onClick={() => void handleSelect(p.id)}
                   >
                     {p.name || p.model}
                   </button>

@@ -1,0 +1,13 @@
+{
+  "activeId": "local-qwen",
+  "profiles": [
+    {
+      "id": "local-qwen",
+      "name": "Qwen ",
+      "baseUrl": "http://61.144.189.71:8066/v1",
+      "model": "Qwen/Qwen2.5-3B-Instruct",
+      "apiKey": "",
+      "temperature": 0.1
+    }
+  ]
+}

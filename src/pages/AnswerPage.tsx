@@ -1,12 +1,15 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import ModelSwitcher from '../components/ModelSwitcher'
+import LlmTracePanel from '../components/LlmTracePanel'
 import { getLlmConfig, isLlmConfigured, tutorLimits } from '../config'
 import {
   LlmNotConfiguredError,
   streamChatCompletion,
   type ChatTurn,
 } from '../lib/llm'
+import { isDevMode, subscribeDevMode, toggleDevMode } from '../lib/devMode'
+import { randomId } from '../lib/id'
 import {
   addToWrongBook,
   loadQuestions,
@@ -19,14 +22,16 @@ import {
   buildCorrectPrompt,
   buildGuideSpeakPrompt,
   buildGuideTurnPrompt,
-  buildNarrationPrompt,
   buildReportPrompt,
   buildRevealPrompt,
   clampGuideTurnResult,
+  extractGuideTurnVisible,
   fallbackGuideSpeak,
   fallbackGuideTurn,
   getGuidePlan,
   parseGuideTurnResult,
+  questionSubject,
+  tutorSystemPrompt,
   type GuideTurnResult,
   type InteractionMode,
 } from '../lib/tutor'
@@ -64,7 +69,8 @@ function welcomeMessages(): UiMessage[] {
 }
 
 export default function AnswerPage() {
-  const [questions, setQuestions] = useState<Question[]>([])
+  const [allQuestions, setAllQuestions] = useState<Question[]>([])
+  const [subjectFilter, setSubjectFilter] = useState<string>('全部')
   const [index, setIndex] = useState(0)
   const [selected, setSelected] = useState<ChoiceKey | null>(null)
   const [messages, setMessages] = useState<UiMessage[]>(welcomeMessages)
@@ -83,6 +89,7 @@ export default function AnswerPage() {
   const [wrongIds, setWrongIds] = useState<string[]>(() => loadWrongBookIds())
   const [error, setError] = useState<string | null>(null)
   const [activeModel, setActiveModel] = useState<LlmModelProfile | null>(() => getLlmConfig())
+  const [devMode, setDevModeState] = useState(() => isDevMode())
   const chatEndRef = useRef<HTMLDivElement>(null)
   const abortRef = useRef<AbortController | null>(null)
   const stageTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -96,12 +103,22 @@ export default function AnswerPage() {
   guideTurnsRef.current = guideTurns
   planRef.current = plan
 
+  const subjectOptions = useMemo(() => {
+    const set = new Set(allQuestions.map((q) => questionSubject(q)))
+    return ['全部', ...[...set].sort((a, b) => a.localeCompare(b, 'zh'))]
+  }, [allQuestions])
+
+  const questions = useMemo(() => {
+    if (subjectFilter === '全部') return allQuestions
+    return allQuestions.filter((q) => questionSubject(q) === subjectFilter)
+  }, [allQuestions, subjectFilter])
+
   useEffect(() => {
     let cancelled = false
     ;(async () => {
       try {
         const list = await loadQuestions()
-        if (!cancelled) setQuestions(list)
+        if (!cancelled) setAllQuestions(list)
       } catch (err) {
         if (!cancelled) {
           setError(
@@ -117,6 +134,8 @@ export default function AnswerPage() {
     }
   }, [])
 
+  useEffect(() => subscribeDevMode(setDevModeState), [])
+
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, streaming])
@@ -129,7 +148,7 @@ export default function AnswerPage() {
   }, [])
 
   const current = questions[index]
-  const wrongQuestions = questions.filter((q) => wrongIds.includes(q.id))
+  const wrongQuestions = allQuestions.filter((q) => wrongIds.includes(q.id))
   const configured = isLlmConfigured()
   const modelLabel = activeModel?.name || activeModel?.model || '未选择'
   const answering = mode === 'ANSWERING'
@@ -145,6 +164,37 @@ export default function AnswerPage() {
   const canPickChoice = (answering || varianting) && !streaming
   const canSubmitChoice =
     (answering || varianting) && Boolean(activeSelected) && !streaming
+
+  function changeSubjectFilter(next: string) {
+    if (next === subjectFilter) return
+    if (streaming) {
+      setError('生成中，请稍后再切换科目。')
+      return
+    }
+    setSubjectFilter(next)
+    setIndex(0)
+    resetTutorForQuestion()
+  }
+
+  function openWrongQuestion(q: Question) {
+    if (streaming) return
+    const subj = questionSubject(q)
+    const nextFilter = subjectFilter === '全部' ? '全部' : subj
+    if (nextFilter !== subjectFilter) {
+      setSubjectFilter(nextFilter)
+    }
+    const pool =
+      nextFilter === '全部'
+        ? allQuestions
+        : allQuestions.filter((x) => questionSubject(x) === nextFilter)
+    const i = pool.findIndex((x) => x.id === q.id)
+    if (i < 0) {
+      setError('当前科目筛选下找不到该错题。')
+      return
+    }
+    setIndex(i)
+    resetTutorForQuestion()
+  }
 
   async function startGuiding(
     question: Question,
@@ -240,7 +290,7 @@ export default function AnswerPage() {
     setMessages((prev) => [
       ...prev,
       {
-        id: crypto.randomUUID(),
+        id: randomId(),
         role: 'user',
         content: text,
         reasoning: '',
@@ -253,7 +303,7 @@ export default function AnswerPage() {
     setMessages((prev) => [
       ...prev,
       {
-        id: crypto.randomUUID(),
+        id: randomId(),
         role: 'assistant',
         content: text,
         reasoning: '',
@@ -285,7 +335,7 @@ export default function AnswerPage() {
 
     setStreaming(true)
     setError(null)
-    const assistantId = crypto.randomUUID()
+    const assistantId = randomId()
     setMessages((prev) => [
       ...prev,
       {
@@ -307,7 +357,7 @@ export default function AnswerPage() {
         [
           {
             role: 'system',
-            content: '你是有耐心的初中数学私教。只输出对学生说的自然语言，有温度，短一些。',
+            content: `${tutorSystemPrompt(opts.question, 'tutor')}只输出对学生说的自然语言，短一些。`,
           },
           {
             role: 'user',
@@ -349,82 +399,12 @@ export default function AnswerPage() {
     }
   }
 
-  /** 短旁白：答对/切变式/掌握等，意图固定、措辞 LLM */
-  async function speakNarration(intent: string, fallback: string, extra?: string) {
-    if (!isLlmConfigured()) {
-      pushTeacher(fallback)
-      return
-    }
-    setStreaming(true)
-    setError(null)
-    const assistantId = crypto.randomUUID()
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: assistantId,
-        role: 'assistant',
-        content: '',
-        reasoning: '',
-        hadReasoningField: false,
-        isStreaming: true,
-        showThink: false,
-      },
-    ])
-    abortRef.current?.abort()
-    const ac = new AbortController()
-    abortRef.current = ac
-    try {
-      const result = await streamChatCompletion(
-        [
-          {
-            role: 'system',
-            content: '你是有耐心的初中数学私教。只输出对学生说的自然语言，有温度，一两句即可。',
-          },
-          {
-            role: 'user',
-            content: buildNarrationPrompt({
-              intent,
-              questionStem: current?.stem,
-              extra,
-            }),
-          },
-        ],
-        (delta) => {
-          if (!delta.content) return
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantId
-                ? { ...m, content: m.content + delta.content }
-                : m,
-            ),
-          )
-        },
-        ac.signal,
-      )
-      const cleaned =
-        result.content.replace(/^["「]|["」]$/g, '').trim() || fallback
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === assistantId ? { ...m, content: cleaned, isStreaming: false } : m,
-        ),
-      )
-    } catch {
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === assistantId ? { ...m, content: fallback, isStreaming: false } : m,
-        ),
-      )
-    } finally {
-      setStreaming(false)
-    }
-  }
-
   async function runStreamText(opts: {
     userForLlm: string
     systemExtra?: string
   }) {
     setError(null)
-    const assistantId = crypto.randomUUID()
+    const assistantId = randomId()
     setMessages((prev) => [
       ...prev,
       {
@@ -447,7 +427,7 @@ export default function AnswerPage() {
     const messagesForApi: ChatTurn[] = [
       {
         role: 'system',
-        content: `${baseSystemPrompt()}${opts.systemExtra ? ` ${opts.systemExtra}` : ''}`,
+        content: `${baseSystemPrompt(current ?? undefined)}${opts.systemExtra ? ` ${opts.systemExtra}` : ''}`,
       },
       { role: 'user', content: opts.userForLlm },
     ]
@@ -520,6 +500,7 @@ export default function AnswerPage() {
     } = {},
   ) {
     setMode('COMPLETED')
+    // 程序已判对错：只调一次 LLM 写解析；掌握确认交给界面按钮
     await runStreamText({
       userForLlm: buildCorrectPrompt({
         question,
@@ -530,10 +511,6 @@ export default function AnswerPage() {
       }),
     })
     setAskMastery(true)
-    await speakNarration(
-      '解析已经给完，温柔地问学生这道题的方法是否掌握了；可提示点「我掌握了」或「还不太懂」。',
-      '这道题的方法你掌握了吗？',
-    )
   }
 
   async function emitReveal(question: Question, choice: ChoiceKey) {
@@ -542,10 +519,6 @@ export default function AnswerPage() {
       userForLlm: buildRevealPrompt({ question, studentAnswer: choice }),
     })
     setAskMastery(true)
-    await speakNarration(
-      '解析看完了，若还不清楚可以选「还不太懂」再走引导；掌握了就点「我掌握了」。',
-      '先看完解析。若仍不清楚，可选「还不太懂」再走一遍引导。',
-    )
   }
 
   /** 原题选择题 */
@@ -558,18 +531,11 @@ export default function AnswerPage() {
     if (choice === current.correctAnswer) {
       setVerdict('correct')
       if (current.variant) {
-        await speakNarration(
-          '原题答对了，热情肯定，并说明接下来做一道变式题检验是否真掌握；不要开始讲完整解析。',
-          '✅ 原题正确！再做一道变式，检验是否真的掌握。',
-        )
+        pushTeacher('✅ 原题正确！再做一道变式，检验是否真的掌握。')
         setVariantChoice(null)
         setMode('VARIANT')
         return
       }
-      await speakNarration(
-        '答对了，简短肯定，并说明下面给出简洁解析。',
-        '✅ 回答正确！下面给出简洁解析。',
-      )
       await emitExplanation(current, choice, {})
       return
     }
@@ -591,10 +557,6 @@ export default function AnswerPage() {
 
     if (choice === current.variant.correctAnswer) {
       setVerdict('correct')
-      await speakNarration(
-        '变式也做对了，说明方法比较扎实，简短肯定并说明下面给出解析。',
-        '✅ 变式也做对了！说明方法比较扎实，下面给出解析。',
-      )
       await emitExplanation(current, confirmedChoice ?? current.correctAnswer, {
         afterVariant: true,
         variantAnswer: choice,
@@ -614,7 +576,7 @@ export default function AnswerPage() {
   async function handleMastered() {
     setAskMastery(false)
     setMastered(true)
-    await speakNarration('学生表示掌握了，简短鼓励，可以说可以进入下一题。', '很好，可以进入下一题了。')
+    pushTeacher('很好，可以进入下一题了。')
   }
 
   function handleNotMastered() {
@@ -671,7 +633,7 @@ export default function AnswerPage() {
 
     setStreaming(true)
     setError(null)
-    const assistantId = crypto.randomUUID()
+    const assistantId = randomId()
     setMessages((prev) => [
       ...prev,
       {
@@ -690,12 +652,12 @@ export default function AnswerPage() {
 
     try {
       if (isLlmConfigured()) {
+        let rawAcc = ''
         const streamResult = await streamChatCompletion(
           [
             {
               role: 'system',
-              content:
-                '你是初中数学私教。只输出一个 JSON 对象，字段：assessment、shouldAdvance、shouldComplete、shouldReveal、message。',
+              content: `${tutorSystemPrompt(current, 'tutor')}先输出对学生说的自然语言，然后单独一行写 ---JSON---，再输出控制用 JSON（assessment 等字段）。不要把 JSON 混进第一段。`,
             },
             {
               role: 'user',
@@ -714,11 +676,11 @@ export default function AnswerPage() {
           ],
           (delta) => {
             if (!delta.content) return
+            rawAcc += delta.content
+            const visible = extractGuideTurnVisible(rawAcc)
             setMessages((prev) =>
               prev.map((m) =>
-                m.id === assistantId
-                  ? { ...m, content: m.content + delta.content }
-                  : m,
+                m.id === assistantId ? { ...m, content: visible } : m,
               ),
             )
           },
@@ -729,6 +691,11 @@ export default function AnswerPage() {
         result = parsed
           ? clampGuideTurnResult(parsed, clampOpts)
           : localFallback()
+        // 解析失败时若已流出一段人话，优先保留可见正文
+        if (!parsed) {
+          const visible = extractGuideTurnVisible(raw).trim()
+          if (visible) result = { ...result, message: visible }
+        }
       }
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') {
@@ -740,7 +707,6 @@ export default function AnswerPage() {
       setStreaming(false)
     }
 
-    // 流式阶段可能先打出 JSON；结束后只保留对学生说的 message
     setMessages((prev) =>
       prev.map((m) =>
         m.id === assistantId
@@ -792,11 +758,11 @@ export default function AnswerPage() {
     setWrongIds([])
   }
 
-  if (!current) {
+  if (allQuestions.length === 0) {
     return (
       <div className="page">
         <p>
-          暂无题目。请先到 <Link to="/">题库页</Link> 添加或恢复示例题。
+          暂无题目。请先到 <Link to="/">题库页</Link> 添加或导入题目。
         </p>
       </div>
     )
@@ -806,7 +772,7 @@ export default function AnswerPage() {
     <div className="page answer-page">
       <header className="topbar">
         <div>
-          <p className="brand">智学数学</p>
+          <p className="brand">智学问答</p>
           <h1>答题辅导</h1>
           <p className="subtitle">
             当前：{modelLabel}
@@ -834,12 +800,20 @@ export default function AnswerPage() {
           >
             今日报告
           </button>
+          <button
+            type="button"
+            className={`ghost${devMode ? ' dev-on' : ''}`}
+            title="默认关闭。开启后显示 LLM 输入输出调试面板。也可用 ?dev=1"
+            onClick={() => toggleDevMode()}
+          >
+            {devMode ? '调试·开' : '调试'}
+          </button>
         </nav>
       </header>
 
       {!configured && (
         <div className="banner warn">
-          解析需要模型：请在上方配置 DeepSeek 等（引导步骤本身不依赖模型判题）。
+          解析需要模型：请在上方添加或选择模型（引导步骤本身不依赖模型判题）。
         </div>
       )}
       {error && (
@@ -853,15 +827,33 @@ export default function AnswerPage() {
 
       <div className="answer-layout">
         <section className="panel question-pane">
-          <div className="row between">
+          <div className="row between wrap gap">
             <h2>
-              第 {index + 1} / {questions.length} 题
+              {questions.length === 0
+                ? '暂无题目'
+                : `第 ${index + 1} / ${questions.length} 题`}
             </h2>
-            <div className="row gap">
+            <div className="row gap wrap">
+              <label className="field inline subject-filter">
+                <span>科目</span>
+                <select
+                  value={subjectFilter}
+                  disabled={streaming}
+                  onChange={(e) => changeSubjectFilter(e.target.value)}
+                >
+                  {subjectOptions.map((s) => (
+                    <option key={s} value={s}>
+                      {s === '全部'
+                        ? `全部（${allQuestions.length}）`
+                        : `${s}（${allQuestions.filter((q) => questionSubject(q) === s).length}）`}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <button
                 type="button"
                 className="ghost"
-                disabled={index === 0 || streaming}
+                disabled={index === 0 || streaming || questions.length === 0}
                 onClick={() => goToQuestion(index - 1)}
               >
                 上一题
@@ -869,7 +861,11 @@ export default function AnswerPage() {
               <button
                 type="button"
                 className="ghost"
-                disabled={index >= questions.length - 1 || streaming}
+                disabled={
+                  index >= questions.length - 1 ||
+                  streaming ||
+                  questions.length === 0
+                }
                 onClick={() => goToQuestion(index + 1)}
               >
                 下一题
@@ -877,8 +873,15 @@ export default function AnswerPage() {
             </div>
           </div>
 
+          {!current ? (
+            <p className="muted">
+              当前科目下没有题目，请切换科目，或到题库导入题目。
+            </p>
+          ) : (
+            <>
           <p className="stem">
             {varianting ? <span className="tag">变式验证</span> : null}{' '}
+            <span className="tag">{questionSubject(current)}</span>{' '}
             {activeStem}
           </p>
           {!varianting && current.tags.length > 0 && (
@@ -969,6 +972,8 @@ export default function AnswerPage() {
           )}
           {completed && !mastered && !askMastery && (
             <p className="round-badge done">本题已完成 · 见右侧解析</p>
+          )}
+            </>
           )}
         </section>
 
@@ -1100,12 +1105,9 @@ export default function AnswerPage() {
                 <button
                   type="button"
                   className="text-btn"
-                  onClick={() => {
-                    const i = questions.findIndex((x) => x.id === q.id)
-                    if (i >= 0) goToQuestion(i)
-                  }}
+                  onClick={() => openWrongQuestion(q)}
                 >
-                  {q.stem}
+                  [{questionSubject(q)}] {q.stem}
                 </button>
                 <span className="muted">
                   {q.tags.length ? q.tags.join('、') : '无标签'}
@@ -1115,6 +1117,7 @@ export default function AnswerPage() {
           </ul>
         )}
       </section>
+      {devMode ? <LlmTracePanel /> : null}
     </div>
   )
 }

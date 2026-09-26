@@ -606,3 +606,133 @@ button.text-btn {
   font-size: 0.78rem;
 }
 
+.guide-plan-box {
+  margin-top: 1rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--line);
+}
+
+.guide-plan-box h4 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.guide-step-editor {
+  margin-top: 0.75rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.02);
+}
+
+.guide-inline-tip {
+  margin: 0.5rem 0 0;
+  font-size: 0.88rem;
+  color: var(--brand-deep, #1f6b4a);
+}
+
+.batch-guide-bar {
+  margin-bottom: 1rem;
+}
+
+.nav-links .dev-on {
+  color: var(--brand-deep, #1f6b4a);
+  font-weight: 600;
+}
+
+.tag.guide-status-draft {
+  background: #fff3cd;
+  color: #7a5b00;
+}
+
+.tag.guide-status-approved {
+  background: #d1e7dd;
+  color: #0f5132;
+}
+
+.tag.guide-status-none {
+  background: #e9ecef;
+  color: #495057;
+}
+
+/* LLM 调试记录面板（临时） */
+.llm-trace-panel {
+  margin-top: 1.5rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #0f1419;
+  color: #d7e0ea;
+}
+
+.llm-trace-panel.collapsed {
+  background: #f4f6f8;
+  color: inherit;
+}
+
+.llm-trace-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.55rem 0.75rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.llm-trace-panel.collapsed .llm-trace-head {
+  border-bottom: none;
+}
+
+.llm-trace-head .ghost {
+  color: inherit;
+}
+
+.llm-trace-body {
+  max-height: 28rem;
+  overflow: auto;
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.llm-trace-item {
+  border-left: 3px solid #3d8bfd;
+  padding-left: 0.65rem;
+}
+
+.llm-trace-item.phase-request {
+  border-left-color: #3dd68c;
+}
+
+.llm-trace-item.phase-error {
+  border-left-color: #f07178;
+}
+
+.llm-trace-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  margin-bottom: 0.35rem;
+  font-size: 0.82rem;
+}
+
+.llm-trace-pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: #c8d4e0;
+}
+
+.subject-filter select {
+  min-width: 7.5rem;
+}
+
+.nav-links .dev-on {
+  color: var(--brand-deep, #1f6b4a);
+  font-weight: 600;
+}
+

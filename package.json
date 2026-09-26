@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
+    "start": "node server.mjs",
     "api": "node server.mjs"
   },
   "dependencies": {

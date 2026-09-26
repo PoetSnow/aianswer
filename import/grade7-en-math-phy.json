@@ -1,0 +1,477 @@
+[
+  {
+    "id": "math-g7-01",
+    "subject": "数学",
+    "stem": "下列各数中，属于正数的是？",
+    "options": {
+      "A": "0",
+      "B": "-3",
+      "C": "+5",
+      "D": "-1/2"
+    },
+    "correctAnswer": "C",
+    "tags": [
+      "有理数",
+      "正负数"
+    ]
+  },
+  {
+    "id": "math-g7-02",
+    "subject": "数学",
+    "stem": "在数轴上，表示 −2 的点在表示 3 的点的：",
+    "options": {
+      "A": "左边 5 个单位",
+      "B": "右边 5 个单位",
+      "C": "左边 1 个单位",
+      "D": "右边 1 个单位"
+    },
+    "correctAnswer": "A",
+    "tags": [
+      "数轴",
+      "有理数"
+    ]
+  },
+  {
+    "id": "math-g7-03",
+    "subject": "数学",
+    "stem": "计算：|−7| + |3| 的结果是？",
+    "options": {
+      "A": "4",
+      "B": "−4",
+      "C": "10",
+      "D": "−10"
+    },
+    "correctAnswer": "C",
+    "tags": [
+      "绝对值",
+      "有理数运算"
+    ]
+  },
+  {
+    "id": "math-g7-04",
+    "subject": "数学",
+    "stem": "计算：−3 + 8 的结果是？",
+    "options": {
+      "A": "−11",
+      "B": "5",
+      "C": "−5",
+      "D": "11"
+    },
+    "correctAnswer": "B",
+    "tags": [
+      "有理数加减"
+    ]
+  },
+  {
+    "id": "math-g7-05",
+    "subject": "数学",
+    "stem": "计算：(−2)×(−5) 的结果是？",
+    "options": {
+      "A": "−10",
+      "B": "10",
+      "C": "−7",
+      "D": "7"
+    },
+    "correctAnswer": "B",
+    "tags": [
+      "有理数乘除"
+    ]
+  },
+  {
+    "id": "math-g7-06",
+    "subject": "数学",
+    "stem": "化简：3x + 5x 的结果是？",
+    "options": {
+      "A": "8x",
+      "B": "15x",
+      "C": "8x²",
+      "D": "3x+5x"
+    },
+    "correctAnswer": "A",
+    "tags": [
+      "整式",
+      "合并同类项"
+    ]
+  },
+  {
+    "id": "math-g7-07",
+    "subject": "数学",
+    "stem": "若方程 x − 4 = 9，则 x 的值是？",
+    "options": {
+      "A": "5",
+      "B": "13",
+      "C": "−5",
+      "D": "36"
+    },
+    "correctAnswer": "B",
+    "tags": [
+      "一元一次方程",
+      "解方程"
+    ]
+  },
+  {
+    "id": "math-g7-08",
+    "subject": "数学",
+    "stem": "若方程 2x = 14，则 x 的值是？",
+    "options": {
+      "A": "7",
+      "B": "12",
+      "C": "16",
+      "D": "28"
+    },
+    "correctAnswer": "A",
+    "tags": [
+      "一元一次方程",
+      "解方程"
+    ]
+  },
+  {
+    "id": "math-g7-09",
+    "subject": "数学",
+    "stem": "互补的两个角，其中一个是 35°，则另一个是？",
+    "options": {
+      "A": "35°",
+      "B": "55°",
+      "C": "145°",
+      "D": "55° 或 145°"
+    },
+    "correctAnswer": "C",
+    "tags": [
+      "角",
+      "互补角"
+    ]
+  },
+  {
+    "id": "math-g7-10",
+    "subject": "数学",
+    "stem": "互余的两个角，其中一个是 40°，则另一个是？",
+    "options": {
+      "A": "40°",
+      "B": "50°",
+      "C": "140°",
+      "D": "90°"
+    },
+    "correctAnswer": "B",
+    "tags": [
+      "角",
+      "互余角"
+    ]
+  },
+  {
+    "id": "eng-g7-01",
+    "subject": "英语",
+    "stem": "— Hello! What’s your name?\n— ______",
+    "options": {
+      "A": "I’m fine, thank you.",
+      "B": "My name is Tom.",
+      "C": "Nice to meet you.",
+      "D": "How are you?"
+    },
+    "correctAnswer": "B",
+    "tags": [
+      "问候",
+      "自我介绍"
+    ]
+  },
+  {
+    "id": "eng-g7-02",
+    "subject": "英语",
+    "stem": "This is my sister. ______ name is Lucy.",
+    "options": {
+      "A": "His",
+      "B": "Her",
+      "C": "He",
+      "D": "She"
+    },
+    "correctAnswer": "B",
+    "tags": [
+      "物主代词",
+      "人称"
+    ]
+  },
+  {
+    "id": "eng-g7-03",
+    "subject": "英语",
+    "stem": "— ______ is your English teacher?\n— Miss Wang.",
+    "options": {
+      "A": "What",
+      "B": "Where",
+      "C": "Who",
+      "D": "How"
+    },
+    "correctAnswer": "C",
+    "tags": [
+      "特殊疑问词"
+    ]
+  },
+  {
+    "id": "eng-g7-04",
+    "subject": "英语",
+    "stem": "There ______ a book and two pens on the desk.",
+    "options": {
+      "A": "is",
+      "B": "are",
+      "C": "be",
+      "D": "am"
+    },
+    "correctAnswer": "A",
+    "tags": [
+      "there be",
+      "主谓一致"
+    ]
+  },
+  {
+    "id": "eng-g7-05",
+    "subject": "英语",
+    "stem": "He ______ to school by bike every day.",
+    "options": {
+      "A": "go",
+      "B": "goes",
+      "C": "going",
+      "D": "to go"
+    },
+    "correctAnswer": "B",
+    "tags": [
+      "一般现在时",
+      "第三人称单数"
+    ]
+  },
+  {
+    "id": "eng-g7-06",
+    "subject": "英语",
+    "stem": "— ______ you like apples?\n— Yes, I do.",
+    "options": {
+      "A": "Do",
+      "B": "Does",
+      "C": "Are",
+      "D": "Is"
+    },
+    "correctAnswer": "A",
+    "tags": [
+      "一般疑问句",
+      "do/does"
+    ]
+  },
+  {
+    "id": "eng-g7-07",
+    "subject": "英语",
+    "stem": "Look! The boys ______ football on the playground.",
+    "options": {
+      "A": "play",
+      "B": "plays",
+      "C": "are playing",
+      "D": "is playing"
+    },
+    "correctAnswer": "C",
+    "tags": [
+      "现在进行时"
+    ]
+  },
+  {
+    "id": "eng-g7-08",
+    "subject": "英语",
+    "stem": "My father ______ a doctor. He works in a hospital.",
+    "options": {
+      "A": "am",
+      "B": "is",
+      "C": "are",
+      "D": "be"
+    },
+    "correctAnswer": "B",
+    "tags": [
+      "be动词",
+      "主谓一致"
+    ]
+  },
+  {
+    "id": "eng-g7-09",
+    "subject": "英语",
+    "stem": "— Where is the library?\n— It’s ______ the classroom and the office.",
+    "options": {
+      "A": "in",
+      "B": "on",
+      "C": "between",
+      "D": "under"
+    },
+    "correctAnswer": "C",
+    "tags": [
+      "方位介词"
+    ]
+  },
+  {
+    "id": "eng-g7-10",
+    "subject": "英语",
+    "stem": "She has ______ egg and ______ useful book.",
+    "options": {
+      "A": "a; a",
+      "B": "an; a",
+      "C": "a; an",
+      "D": "an; an"
+    },
+    "correctAnswer": "B",
+    "tags": [
+      "冠词",
+      "a/an"
+    ]
+  },
+  {
+    "id": "phy-g7-01",
+    "subject": "物理",
+    "stem": "国际单位制中，长度的基本单位是？",
+    "options": {
+      "A": "厘米",
+      "B": "分米",
+      "C": "米",
+      "D": "千米"
+    },
+    "correctAnswer": "C",
+    "tags": [
+      "测量",
+      "单位"
+    ]
+  },
+  {
+    "id": "phy-g7-02",
+    "subject": "物理",
+    "stem": "用刻度尺测量物体长度时，读数时应做到？",
+    "options": {
+      "A": "视线斜视刻度",
+      "B": "视线正对刻度",
+      "C": "越远越好",
+      "D": "不必估读"
+    },
+    "correctAnswer": "B",
+    "tags": [
+      "测量",
+      "刻度尺"
+    ]
+  },
+  {
+    "id": "phy-g7-03",
+    "subject": "物理",
+    "stem": "下列物体中，正在发声的是？",
+    "options": {
+      "A": "静静放着的鼓",
+      "B": "正在敲响的鼓",
+      "C": "未拨动的琴弦",
+      "D": "合上的书本"
+    },
+    "correctAnswer": "B",
+    "tags": [
+      "声音",
+      "振动"
+    ]
+  },
+  {
+    "id": "phy-g7-04",
+    "subject": "物理",
+    "stem": "声音在下列哪种介质中传播速度通常最大？",
+    "options": {
+      "A": "空气",
+      "B": "水",
+      "C": "钢铁",
+      "D": "真空"
+    },
+    "correctAnswer": "C",
+    "tags": [
+      "声音",
+      "传播"
+    ]
+  },
+  {
+    "id": "phy-g7-05",
+    "subject": "物理",
+    "stem": "光在同种均匀介质中沿______传播。",
+    "options": {
+      "A": "曲线",
+      "B": "折线",
+      "C": "直线",
+      "D": "任意路径"
+    },
+    "correctAnswer": "C",
+    "tags": [
+      "光",
+      "直线传播"
+    ]
+  },
+  {
+    "id": "phy-g7-06",
+    "subject": "物理",
+    "stem": "下列属于光源的是？",
+    "options": {
+      "A": "月亮",
+      "B": "镜子",
+      "C": "点燃的蜡烛",
+      "D": "白墙"
+    },
+    "correctAnswer": "C",
+    "tags": [
+      "光",
+      "光源"
+    ]
+  },
+  {
+    "id": "phy-g7-07",
+    "subject": "物理",
+    "stem": "下列现象中，说明力可以改变物体运动状态的是？",
+    "options": {
+      "A": "用力把橡皮泥捏扁",
+      "B": "足球被踢后由静止变运动",
+      "C": "弹簧被拉长",
+      "D": "面包被压扁"
+    },
+    "correctAnswer": "B",
+    "tags": [
+      "力",
+      "运动状态"
+    ]
+  },
+  {
+    "id": "phy-g7-08",
+    "subject": "物理",
+    "stem": "力的作用效果与下列因素无关的是？",
+    "options": {
+      "A": "力的大小",
+      "B": "力的方向",
+      "C": "力的作用点",
+      "D": "物体的颜色"
+    },
+    "correctAnswer": "D",
+    "tags": [
+      "力",
+      "三要素"
+    ]
+  },
+  {
+    "id": "phy-g7-09",
+    "subject": "物理",
+    "stem": "冬天手冷时搓手会感觉暖和，主要是因为？",
+    "options": {
+      "A": "手从空气中吸热",
+      "B": "摩擦生热",
+      "C": "手的质量变大",
+      "D": "空气温度升高很多"
+    },
+    "correctAnswer": "B",
+    "tags": [
+      "热",
+      "摩擦"
+    ]
+  },
+  {
+    "id": "phy-g7-10",
+    "subject": "物理",
+    "stem": "下列物态变化中，属于熔化的是？",
+    "options": {
+      "A": "冬天玻璃窗上结冰花",
+      "B": "冰棍慢慢化成水",
+      "C": "湿衣服晾干",
+      "D": "烧开水冒出「白气」"
+    },
+    "correctAnswer": "B",
+    "tags": [
+      "物态变化",
+      "熔化"
+    ]
+  }
+]

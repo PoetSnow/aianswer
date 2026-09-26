@@ -1,5 +1,6 @@
 import { seedQuestions } from '../data/seedQuestions'
-import { WRONG_BOOK_KEY, type Question } from '../types'
+import { DEFAULT_SUBJECT, WRONG_BOOK_KEY, type Question } from '../types'
+import { randomId } from './id'
 
 export class QuestionsApiError extends Error {
   status?: number
@@ -76,11 +77,11 @@ export function addToWrongBook(questionId: string): string[] {
 
 export function createEmptyQuestion(): Question {
   return {
-    id: crypto.randomUUID(),
+    id: randomId(),
     stem: '新题目（请编辑题干）',
     options: { A: '', B: '', C: '', D: '' },
     correctAnswer: 'A',
     tags: [],
-    solution: '',
+    subject: DEFAULT_SUBJECT,
   }
 }

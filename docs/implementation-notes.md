@@ -25,7 +25,7 @@
 
 | 数据 | 文件 |
 |------|------|
-| `guideSteps`（意图） | 题库；开场话术 LLM 润色；学生回复后 LLM 返回 `GuideTurnResult` |
+| `guideSteps` + `guidePlanStatus` | 题库；`draft` 仅审核用，`approved`（或旧题无 status）答题才用；可「生成教案草稿」 |
 | `variant` | 变式选择题 |
 | 契约 / 钳制 / 兜底 | `src/lib/tutor.ts`（`parseGuideTurnResult` / `clampGuideTurnResult` / `fallbackGuideTurn`） |
 | 轮次上限等常量 | `src/config.ts` → `tutorLimits` |
@@ -51,6 +51,7 @@
 ### 存储
 
 - `ai-math-tutor-llm-models` / `ai-math-tutor-llm-active`
+- 开发者调试：`aianswer-dev-mode`（默认关；答题页「调试」或 `?dev=1`）
 
 ### 请求链路
 

@@ -1,91 +1,24 @@
+import { LLM_ACTIVE_MODEL_KEY, type LlmModelProfile } from '../types'
+import { randomId } from './id'
 import {
-  LLM_ACTIVE_MODEL_KEY,
-  LLM_MODELS_KEY,
-  type LlmModelProfile,
-} from '../types'
-
-/** 内网小模型预设，便于先验证界面切换 */
-export const LOCAL_QWEN_PRESET: Omit<LlmModelProfile, 'id'> = {
-  name: '内网 Qwen (61.144.189.71:8066 Chat)',
-  baseUrl: 'http://61.144.189.71:8066/v1',
-  model: 'Qwen/Qwen2.5-3B-Instruct',
-  apiKey: '',
-  temperature: 0.1,
-}
+  ensureServerLlmConfig,
+  getServerLlmState,
+  saveProfilesToServer,
+} from './serverLlm'
 
 function normalizeBaseUrl(url: string): string {
   return url.trim().replace(/\/$/, '')
 }
 
-function envSeedProfile(): LlmModelProfile | null {
-  const baseUrl = (import.meta.env.VITE_LLM_BASE_URL as string | undefined)?.trim()
-  const apiKey = (import.meta.env.VITE_LLM_API_KEY as string | undefined)?.trim() ?? ''
-  const model = (import.meta.env.VITE_LLM_MODEL as string | undefined)?.trim()
-  if (!baseUrl || !model) return null
-  return {
-    id: 'env-default',
-    name: `环境变量 · ${model}`,
-    baseUrl: normalizeBaseUrl(baseUrl),
-    model,
-    apiKey,
-    temperature: 0.7,
-  }
-}
-
-function defaultProfiles(): LlmModelProfile[] {
-  const list: LlmModelProfile[] = [
-    {
-      id: 'local-qwen',
-      ...LOCAL_QWEN_PRESET,
-    },
-  ]
-  const fromEnv = envSeedProfile()
-  if (fromEnv) list.unshift(fromEnv)
-  return list
-}
-
-function isProfile(raw: unknown): raw is LlmModelProfile {
-  if (!raw || typeof raw !== 'object') return false
-  const p = raw as Record<string, unknown>
-  return (
-    typeof p.id === 'string' &&
-    typeof p.name === 'string' &&
-    typeof p.baseUrl === 'string' &&
-    typeof p.model === 'string' &&
-    typeof p.apiKey === 'string' &&
-    (typeof p.temperature === 'number' || p.temperature == null)
-  )
-}
-
 export function loadModelProfiles(): LlmModelProfile[] {
-  try {
-    const raw = localStorage.getItem(LLM_MODELS_KEY)
-    if (!raw) {
-      const seeded = defaultProfiles()
-      saveModelProfiles(seeded)
-      return seeded
-    }
-    const parsed = JSON.parse(raw) as unknown
-    if (!Array.isArray(parsed) || parsed.length === 0) {
-      const seeded = defaultProfiles()
-      saveModelProfiles(seeded)
-      return seeded
-    }
-    return parsed.filter(isProfile).map((p) => ({
-      ...p,
-      baseUrl: normalizeBaseUrl(p.baseUrl),
-      temperature: typeof p.temperature === 'number' ? p.temperature : 0.7,
-    }))
-  } catch {
-    return defaultProfiles()
-  }
-}
-
-export function saveModelProfiles(profiles: LlmModelProfile[]): void {
-  localStorage.setItem(LLM_MODELS_KEY, JSON.stringify(profiles))
+  return getServerLlmState().profiles
 }
 
 export function getActiveModelId(profiles: LlmModelProfile[]): string {
+  const state = getServerLlmState()
+  if (state.activeId && profiles.some((p) => p.id === state.activeId)) {
+    return state.activeId
+  }
   try {
     const id = localStorage.getItem(LLM_ACTIVE_MODEL_KEY)
     if (id && profiles.some((p) => p.id === id)) return id
@@ -96,7 +29,13 @@ export function getActiveModelId(profiles: LlmModelProfile[]): string {
 }
 
 export function setActiveModelId(id: string): void {
-  localStorage.setItem(LLM_ACTIVE_MODEL_KEY, id)
+  try {
+    localStorage.setItem(LLM_ACTIVE_MODEL_KEY, id)
+  } catch {
+    // ignore
+  }
+  const state = getServerLlmState()
+  state.activeId = id
 }
 
 export function getActiveProfile(): LlmModelProfile | null {
@@ -111,11 +50,18 @@ export function isProfileReady(profile: LlmModelProfile | null | undefined): boo
   return Boolean(profile.baseUrl.trim() && profile.model.trim())
 }
 
-export function upsertProfile(profile: LlmModelProfile): LlmModelProfile[] {
-  const list = loadModelProfiles()
-  const idx = list.findIndex((p) => p.id === profile.id)
-  const next = {
+async function persist(list: LlmModelProfile[], activeId: string): Promise<LlmModelProfile[]> {
+  const saved = await saveProfilesToServer(list, activeId)
+  setActiveModelId(saved.activeId)
+  return saved.profiles
+}
+
+export async function upsertProfile(profile: LlmModelProfile): Promise<LlmModelProfile[]> {
+  await ensureServerLlmConfig()
+  const list = [...loadModelProfiles()]
+  const next: LlmModelProfile = {
     ...profile,
+    shared: true,
     baseUrl: normalizeBaseUrl(profile.baseUrl),
     name: profile.name.trim() || profile.model,
     model: profile.model.trim(),
@@ -125,30 +71,41 @@ export function upsertProfile(profile: LlmModelProfile): LlmModelProfile[] {
         ? profile.temperature
         : 0.7,
   }
+  const idx = list.findIndex((p) => p.id === next.id)
   if (idx >= 0) list[idx] = next
   else list.push(next)
-  saveModelProfiles(list)
-  return list
+  const activeId = getActiveModelId(list) || next.id
+  return persist(list, activeId)
 }
 
-export function deleteProfile(id: string): LlmModelProfile[] {
+export async function deleteProfile(id: string): Promise<LlmModelProfile[]> {
+  await ensureServerLlmConfig()
   const list = loadModelProfiles().filter((p) => p.id !== id)
-  saveModelProfiles(list)
-  const active = getActiveModelId(list)
-  if (active === id || !list.some((p) => p.id === active)) {
-    setActiveModelId(list[0]?.id ?? '')
+  let activeId = getActiveModelId(list)
+  if (!list.some((p) => p.id === activeId)) {
+    activeId = list[0]?.id ?? ''
   }
-  return list
+  return persist(list, activeId)
+}
+
+export async function selectActiveModel(id: string): Promise<LlmModelProfile[]> {
+  await ensureServerLlmConfig()
+  const list = loadModelProfiles()
+  if (!list.some((p) => p.id === id)) return list
+  setActiveModelId(id)
+  return persist(list, id)
 }
 
 export function createEmptyProfile(): LlmModelProfile {
+  const existing = loadModelProfiles()[0]
   return {
-    id: crypto.randomUUID(),
+    id: randomId(),
     name: '',
-    baseUrl: 'https://api.deepseek.com/v1',
+    baseUrl: existing?.baseUrl ?? '',
     model: '',
     apiKey: '',
-    temperature: 0.7,
+    temperature: existing?.temperature ?? 0.7,
+    shared: true,
   }
 }
 
@@ -181,11 +138,17 @@ export function profileFromExternalJson(raw: unknown): LlmModelProfile {
     throw new Error('需要 Endpoint（或 baseUrl）与 ModelName（或 model）')
   }
   return {
-    id: code || crypto.randomUUID(),
+    id: code || randomId(),
     name,
     baseUrl: normalizeBaseUrl(baseUrl),
     model,
     apiKey,
     temperature,
+    shared: true,
   }
+}
+
+/** 兼容旧调用：本地不再单独存模型表 */
+export function saveModelProfiles(_profiles: LlmModelProfile[]): void {
+  // no-op：持久化走 saveProfilesToServer
 }

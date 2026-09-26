@@ -1,6 +1,6 @@
 import { tutorLimits } from '../config'
 import type { ChoiceKey, GuideStep, Question } from '../types'
-import { CHOICE_KEYS } from '../types'
+import { CHOICE_KEYS, DEFAULT_SUBJECT } from '../types'
 
 export type InteractionMode = 'ANSWERING' | 'VARIANT' | 'GUIDING' | 'COMPLETED'
 
@@ -99,8 +99,35 @@ function optionValueCandidates(question: Question): string[] {
   return [...cands]
 }
 
+export function questionSubject(question: Question): string {
+  const s = question.subject?.trim()
+  return s || DEFAULT_SUBJECT
+}
+
+/** 统一老师人格：跟题目学科走 */
+export function tutorSystemPrompt(
+  question: Question,
+  style: 'teacher' | 'tutor' | 'planner' = 'teacher',
+): string {
+  const subject = questionSubject(question)
+  if (style === 'planner') {
+    return `你是初中${subject}教研员。根据题目写「分步引导教案」草稿，供老师审核。只输出 JSON，不要复述写作要求。`
+  }
+  if (style === 'tutor') {
+    return `你是有耐心的初中${subject}私教。对学生只写自然、简洁的中文，有温度；不要复述写作要求。`
+  }
+  return `你是初中${subject}老师。对学生只写自然、简洁的中文，不要复述写作要求。`
+}
+
+export function isGuidePlanApproved(question: Question): boolean {
+  if (!question.guideSteps || question.guideSteps.length === 0) return false
+  if (question.guidePlanStatus === 'draft') return false
+  // approved，或旧题库未写 status
+  return true
+}
+
 export function getGuidePlan(question: Question): GuideStep[] {
-  if (question.guideSteps && question.guideSteps.length > 0) {
+  if (isGuidePlanApproved(question) && question.guideSteps) {
     return question.guideSteps
   }
   return [
@@ -113,8 +140,78 @@ export function getGuidePlan(question: Question): GuideStep[] {
   ]
 }
 
-export function baseSystemPrompt(): string {
-  return '你是初中数学老师。对学生只写自然、简洁的中文，不要复述写作要求。'
+/** 题库：根据题干生成 guideSteps 草稿 */
+export function buildGuidePlanDraftPrompt(question: Question): string {
+  const subject = questionSubject(question)
+  const optionLines = CHOICE_KEYS.map((k) => `${k}. ${question.options[k]}`).join('\n')
+  return [
+    `学科：${subject}。按该学科的教法拆步骤，不要套用其它学科的术语习惯。`,
+    '学生答错选择题后，会按这些步骤短问答引导，不要一次问出最终选项字母。',
+    '',
+    `题干：${question.stem}`,
+    optionLines,
+    `正确答案：${question.correctAnswer}`,
+    `标签：${question.tags.join('、') || '（无）'}`,
+    '',
+    '没有标准解析：请根据题干、选项与正确答案自行推断合理分步。',
+    '',
+    '输出要求：只输出一个 JSON 数组（不要 Markdown 围栏），2～4 步，例如：',
+    '[',
+    '  {',
+    '    "id": "step-1",',
+    '    "ask": "本步教学目标（一句话，可写成对学生的小问题）",',
+    '    "expectedAnswers": ["可选参考短答1", "短答2"],',
+    '    "hintAsk": "答错时更简单的问法（可选）"',
+    '  }',
+    ']',
+    '规则：',
+    '- ask 写清「这一步要学生想到什么」，不要剧透最终选项字母',
+    '- expectedAnswers 给 1～4 个可接受短答，供程序兜底',
+    '- 最后一步对准最终结论，仍尽量不要求学生答选项字母',
+    '- 步骤由易到难，贴合该学科解析',
+  ].join('\n')
+}
+
+export function parseGuidePlanDraft(raw: string): GuideStep[] | null {
+  const trimmed = raw.trim()
+  let text = trimmed
+  const fence = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)
+  if (fence) text = fence[1].trim()
+  else {
+    const start = trimmed.indexOf('[')
+    const end = trimmed.lastIndexOf(']')
+    if (start >= 0 && end > start) text = trimmed.slice(start, end + 1)
+  }
+  try {
+    const arr = JSON.parse(text) as unknown
+    if (!Array.isArray(arr) || arr.length === 0) return null
+    const steps: GuideStep[] = []
+    for (let i = 0; i < arr.length; i++) {
+      const s = arr[i] as Record<string, unknown>
+      if (!s || typeof s !== 'object') continue
+      const ask = String(s.ask ?? '').trim()
+      if (!ask) continue
+      const expectedRaw = s.expectedAnswers
+      const expectedAnswers = Array.isArray(expectedRaw)
+        ? expectedRaw.map((a) => String(a).trim()).filter(Boolean)
+        : undefined
+      const hintAsk = String(s.hintAsk ?? '').trim()
+      steps.push({
+        id: typeof s.id === 'string' && s.id.trim() ? s.id.trim() : `step-${i + 1}`,
+        ask,
+        ...(expectedAnswers && expectedAnswers.length > 0 ? { expectedAnswers } : {}),
+        ...(hintAsk ? { hintAsk } : {}),
+      })
+    }
+    return steps.length > 0 ? steps : null
+  } catch {
+    return null
+  }
+}
+
+export function baseSystemPrompt(question?: Question): string {
+  if (question) return tutorSystemPrompt(question, 'teacher')
+  return `你是初中${DEFAULT_SUBJECT}老师。对学生只写自然、简洁的中文，不要复述写作要求。`
 }
 
 /** 开场 / 纯话术润色（无学生本轮作答） */
@@ -137,6 +234,7 @@ export function buildGuideSpeakPrompt(opts: {
 
   return [
     '【话术】步骤意图固定，你写有温度的人话。',
+    `学科：${questionSubject(opts.question)}`,
     toneLine,
     opts.prefaceIntent ? `开场意图：${opts.prefaceIntent}` : '',
     `本步教学目标：${opts.step.ask}`,
@@ -168,6 +266,15 @@ export function fallbackGuideSpeak(opts: {
 }
 
 /**
+ * 引导轮输出协议（一次调用、可流式）：
+ * 1) 先写对学生说的自然语言
+ * 2) 空行后写分隔符 ---JSON---
+ * 3) 再写控制面 JSON（不含对学生正文）
+ * 流式时 UI 只展示分隔符之前的人话。
+ */
+export const GUIDE_TURN_JSON_MARK = '---JSON---'
+
+/**
  * 学生回复后的引导轮：LLM 同时给 assessment + 话术。
  * 程序只读字段，不自行用正则判语义（正则仅兜底）。
  */
@@ -186,7 +293,8 @@ export function buildGuideTurnPrompt(opts: {
   const nearLimit = opts.guideTurnsUsed >= opts.maxGuideTurns - 1
 
   return [
-    '【引导轮·结构化】你既要判断学生本轮回复，也要写老师下一句。',
+    '【引导轮】先写对学生说的话，再写控制 JSON。',
+    `学科：${questionSubject(opts.question)}（按该学科判断对错与表述）`,
     `题目：${opts.question.stem}`,
     `标准解析（仅供你判断，勿直接甩给学生）：${opts.question.solution?.trim() || '（无）'}`,
     `选择题正确答案字母（勿提前泄露）：${opts.question.correctAnswer}`,
@@ -204,54 +312,99 @@ export function buildGuideTurnPrompt(opts: {
     isLast ? '这是最后一步教学目标。' : '',
     nearLimit ? '轮次将尽：若仍不对可考虑 shouldReveal=true。' : '',
     '',
-    '只输出一个 JSON 对象（不要 Markdown 围栏）：',
+    '严格按下面格式输出（不要 Markdown 围栏）：',
+    '（第一段：对学生说的中文，温暖自然；若本步正确且有下一步，须含肯定并引出下一步）',
+    GUIDE_TURN_JSON_MARK,
     '{',
     '  "assessment": "correct" | "wrong" | "confused" | "off_topic",',
     '  "shouldAdvance": boolean,',
     '  "shouldComplete": boolean,',
-    '  "shouldReveal": boolean,',
-    '  "message": "对学生说的中文"',
+    '  "shouldReveal": boolean',
     '}',
     '规则：',
+    '- 第一段只能是对学生说的话，禁止出现 JSON、字段名、分隔符',
     '- assessment=correct：本步目标已达成（允许「负三」「-3」「3的相反数」等等价说法）',
     '- assessment=wrong：未达成，继续本步或降难度问',
     '- assessment=confused：听不懂，换更小步问法',
     '- assessment=off_topic：明显跑题，拉回本题；此时 shouldAdvance/Complete/Reveal 都必须 false',
-    '- shouldAdvance：仅 correct 且还有下一步时可为 true；message 须含肯定并引出下一步',
-    '- shouldComplete：最后一步也 correct，或引导已可收束出解析；message 可简短收束',
+    '- shouldAdvance：仅 correct 且还有下一步时可为 true',
+    '- shouldComplete：最后一步也 correct，或引导已可收束出解析',
     '- shouldReveal：多次失败建议揭晓完整解；与 shouldComplete 不要同时 true',
-    '- message 温暖自然；禁止泄露正确选项字母（除非 shouldReveal/shouldComplete 进入收束）',
-    '- 禁止在 message 里写 assessment 字段名或 JSON',
+    '- 禁止在第一段泄露正确选项字母（除非 shouldReveal/shouldComplete 进入收束）',
   ]
     .filter(Boolean)
     .join('\n')
 }
 
-export function parseGuideTurnResult(raw: string): GuideTurnResult | null {
-  const trimmed = raw.trim()
-  let jsonText = trimmed
-  const fence = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)
-  if (fence) jsonText = fence[1].trim()
+/** 流式展示：只保留分隔符之前的人话；并去掉尚未写完的分隔符前缀 */
+export function extractGuideTurnVisible(raw: string): string {
+  const mark = GUIDE_TURN_JSON_MARK
+  const idx = raw.indexOf(mark)
+  if (idx >= 0) return raw.slice(0, idx).replace(/\s+$/, '')
+  for (let n = Math.min(mark.length - 1, raw.length); n > 0; n--) {
+    if (raw.endsWith(mark.slice(0, n))) {
+      return raw.slice(0, -n).replace(/\s+$/, '')
+    }
+  }
+  return raw
+}
+
+function parseGuideControlJson(jsonText: string): Omit<GuideTurnResult, 'message'> | null {
+  let text = jsonText.trim()
+  const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/i)
+  if (fence) text = fence[1].trim()
   else {
-    const start = trimmed.indexOf('{')
-    const end = trimmed.lastIndexOf('}')
-    if (start >= 0 && end > start) jsonText = trimmed.slice(start, end + 1)
+    const start = text.indexOf('{')
+    const end = text.lastIndexOf('}')
+    if (start >= 0 && end > start) text = text.slice(start, end + 1)
   }
   try {
-    const o = JSON.parse(jsonText) as Record<string, unknown>
+    const o = JSON.parse(text) as Record<string, unknown>
     const assessment = String(o.assessment ?? '') as GuideAssessment
     if (!['correct', 'wrong', 'confused', 'off_topic'].includes(assessment)) {
       return null
     }
-    const message = String(o.message ?? '').trim()
-    if (!message) return null
     return {
       assessment,
       shouldAdvance: Boolean(o.shouldAdvance),
       shouldComplete: Boolean(o.shouldComplete),
       shouldReveal: Boolean(o.shouldReveal),
-      message,
     }
+  } catch {
+    return null
+  }
+}
+
+export function parseGuideTurnResult(raw: string): GuideTurnResult | null {
+  const trimmed = raw.trim()
+  if (!trimmed) return null
+
+  const markIdx = trimmed.indexOf(GUIDE_TURN_JSON_MARK)
+  if (markIdx >= 0) {
+    const message = trimmed.slice(0, markIdx).trim()
+    const control = parseGuideControlJson(
+      trimmed.slice(markIdx + GUIDE_TURN_JSON_MARK.length),
+    )
+    if (!control || !message) return null
+    return { ...control, message }
+  }
+
+  // 兼容旧格式：整段纯 JSON 且含 message
+  const control = parseGuideControlJson(trimmed)
+  if (!control) return null
+  try {
+    let jsonText = trimmed
+    const fence = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)
+    if (fence) jsonText = fence[1].trim()
+    else {
+      const start = trimmed.indexOf('{')
+      const end = trimmed.lastIndexOf('}')
+      if (start >= 0 && end > start) jsonText = trimmed.slice(start, end + 1)
+    }
+    const o = JSON.parse(jsonText) as Record<string, unknown>
+    const message = String(o.message ?? '').trim()
+    if (!message) return null
+    return { ...control, message }
   } catch {
     return null
   }
@@ -363,10 +516,12 @@ export function fallbackGuideTurn(opts: {
 export function buildNarrationPrompt(opts: {
   intent: string
   questionStem?: string
+  subject?: string
   extra?: string
 }): string {
   return [
     '用一两句有温度的中文对学生说话。',
+    opts.subject ? `学科：${opts.subject}` : '',
     `意图（必达，可自由改措辞）：${opts.intent}`,
     opts.questionStem ? `相关题目：${opts.questionStem}` : '',
     opts.extra ?? '',
@@ -410,13 +565,17 @@ export function buildCorrectPrompt(opts: {
 
   return [
     '写一段给学生看的解析（纯正文）：',
+    `学科：${questionSubject(opts.question)}`,
     wrong,
     hintLine,
-    '写清关键步骤，结尾点明正确选项字母。不要提问，不要写元话语。',
+    '开头可用一句很短的肯定（若选对），紧接着写清关键步骤，结尾点明正确选项字母。',
+    '不要提问、不要写元话语、不要单独再问「掌握了吗」（界面会提供按钮）。',
     '',
     `题目：${opts.question.stem}`,
     optionLines,
-    `标准解析：${opts.question.solution?.trim() || '（无）'}`,
+    opts.question.solution?.trim()
+      ? `参考解析：${opts.question.solution.trim()}`
+      : '无参考解析：请根据题干与选项自行写清理由。',
     variantBlock,
   ]
     .filter(Boolean)
@@ -430,6 +589,7 @@ export function buildRevealPrompt(opts: {
   const optionLines = CHOICE_KEYS.map((k) => `${k}. ${opts.question.options[k]}`).join('\n')
   return [
     '引导多次仍未完成。给学生写完整解析与正确选项，语气温和。不要提问。',
+    `学科：${questionSubject(opts.question)}`,
     '',
     `题目：${opts.question.stem}`,
     optionLines,
@@ -442,10 +602,11 @@ export function buildRevealPrompt(opts: {
 export function buildReportPrompt(wrongQuestions: Question[]): string {
   const lines = wrongQuestions.map((q, i) => {
     const tags = q.tags.length ? q.tags.join('、') : '未标注'
-    return `${i + 1}. ${q.stem.slice(0, 60)}…｜标签：${tags}`
+    const subject = questionSubject(q)
+    return `${i + 1}. [${subject}] ${q.stem.slice(0, 60)}…｜标签：${tags}`
   })
   return [
-    '请根据学生今日错题的知识点标签，用简洁中文写一份「今日学习诊断报告」。',
+    '请根据学生今日错题的学科与知识点标签，用简洁中文写一份「今日学习诊断报告」。',
     '指出薄弱知识点、给出 2–3 条复习建议、鼓励收尾。不要逐题公布正确答案。',
     '',
     '错题列表：',
