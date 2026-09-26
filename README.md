@@ -2,6 +2,9 @@
 
 最小可用的双页 React 应用：题库管理 + 答题辅导（流式 LLM）。
 
+> **实现备忘**：[`docs/implementation-notes.md`](docs/implementation-notes.md)  
+> **产品交互规则（双通道）**：[`docs/产品交互规则.md`](docs/产品交互规则.md)
+
 ## 快速开始
 
 ```bash
@@ -14,7 +17,7 @@ npm run dev
 
 `npm run dev` 会同时启动 Vite 与题库 API 中间件（`GET/PUT /api/questions`），读写项目内 **`data/questions.json`**。
 
-未配置 LLM 时仍可浏览题库与作答 UI；确认后流式聊天需要有效的 `VITE_LLM_*`。
+未配置 LLM 时仍可浏览题库与作答 UI；确认后流式聊天需在界面配置模型（本地模型可无 Key）。
 
 ## 题库持久化
 
@@ -28,17 +31,25 @@ npm run dev
 
 可选独立 API（一般不必）：`npm run api` → `http://127.0.0.1:5174/api/questions`。
 
-## LLM 配置
+## LLM 配置（界面切换）
 
-在项目根目录创建 `.env`（参考 `.env.example`）：
+答题页顶部可 **添加 / 编辑 / 切换模型**，配置保存在浏览器 `localStorage`（含 API Key，不入库）。
 
-| 变量 | 说明 | 示例 |
+| 字段 | 说明 | 示例 |
 |------|------|------|
-| `VITE_LLM_BASE_URL` | OpenAI 兼容 API 根路径 | `https://api.deepseek.com/v1` |
-| `VITE_LLM_API_KEY` | API Key | `sk-...` |
-| `VITE_LLM_MODEL` | 模型名 | `deepseek-chat` |
+| 显示名称 | 下拉框里看到的名字 | `内网 Qwen …` |
+| Base URL | OpenAI 兼容根路径（含 `/v1`） | `http://61.144.189.71:8066/v1` |
+| Model | `model` 字段 | `Qwen/Qwen2.5-3B-Instruct` |
+| API Key | 可选；本地 vLLM 可留空 | `sk-...` 或空 |
+| Temperature | 采样温度 | `0.1` |
 
-修改 `.env` 后需**重启** `npm run dev`。切勿把真实密钥提交到 Git。
+首次打开会预置「内网 Qwen」；若存在 `.env` 的 `VITE_LLM_*` 也会作为一条「环境变量」模型。
+
+也可在「从外部 JSON 导入」粘贴 NetAgent 风格配置（`Endpoint` / `ModelName` / `ApiKey` / `ChatCompletionsPath`）。
+
+请求经开发服务器 **`POST /api/llm/chat/completions`** 代理到目标端点，便于访问内网并规避浏览器 CORS。
+
+可选 `.env`（参考 `.env.example`）仍可作为默认条目；**不必重启**即可在界面切换模型。切勿把真实密钥提交到 Git。
 
 ## 页面说明
 

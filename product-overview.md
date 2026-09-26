@@ -39,7 +39,7 @@
 |------|------|------|
 | 题库 | **`data/questions.json`** | `GET/PUT /api/questions`；Vite dev/preview 中间件挂载；原子写入 |
 | 错题本 | `localStorage` | 仅保存错题 id 列表 |
-| LLM 配置 | `.env`（`VITE_LLM_*`） | 不入库 |
+| LLM 配置 | 浏览器 localStorage + 可选 `.env` | 界面切换模型；Key 不入库 |
 
 上传 / 编辑题库必须以磁盘 JSON 为准。需保持 `npm run dev` 运行，接口才可用。
 
@@ -47,39 +47,19 @@
 
 ## 4. 核心交互规则（已实现）
 
-### 4.1 答对
+**权威全文**：[`docs/产品交互规则.md`](docs/产品交互规则.md)（含双通道）  
+**状态机**：`src/lib/tutor.ts` + `src/pages/AnswerPage.tsx`
 
-1. AI 先鼓励，再给出**完整解题思路与答案**（优先展开题库里的标准解析）
-2. 回复结束后出现**醒目「下一题」**，点击进入下一题并清空本轮辅导状态
+### 4.0 双通道（步骤意图在题库，引导判断在 LLM）
 
-### 4.2 答错（最多 3 轮引导）
-
-| 轮次 | 行为 |
+| Mode | 行为 |
 |------|------|
-| 第 1/3 | 肯定尝试 + 点出知识点标签 + 苏格拉底式提问；**不公布**正确选项 |
-| 第 2/3 | 更强思路提示与易错点；仍尽量不直接给正确字母 |
-| 第 3/3 | **完整解析 + 正确答案**；本轮辅导结束 |
+| ANSWERING | 仅 A–D；程序判选择题 |
+| VARIANT | 变式 A–D；程序判 |
+| GUIDING | 走题库 `guideSteps`；每轮 LLM 返回 JSON（`assessment` 等），程序推进；失败才 `answersMatch` 兜底 |
+| COMPLETED | LLM 写解析；询问掌握 |
 
-- 右侧可多轮输入；界面显示「引导 n/3」
-- 用户反复说「不懂」等也会**消耗轮次**
-- 第 3 轮揭晓后**禁止继续聊本题**，并出现「下一题」
-- 错题写入底部错题本
-
-### 4.3 对话边界
-
-- 只讨论**当前这一道题**
-- 闲聊 / 跑题：短句拉回本题（另有关键词拦截，离题不耗轮次）
-
-### 4.4 思考过程展示
-
-每条老师回复上方有可折叠的「思考过程」：
-
-- 若模型 SSE 带 `reasoning_content` / `reasoning`：流式展示真实思考
-- 若无：展示阶段标签（对照知识点 → 组织引导 → 生成回复），**不伪造**假思考文案
-
-### 4.5 今日报告
-
-错题本非空时可点「今日报告」：按错题知识点标签生成简短学习诊断建议（流式）。
+常量：`tutorLimits.maxGuideTurns`（默认 8）。
 
 ---
 
@@ -89,10 +69,10 @@
 |----|------|
 | 前端 | Vite + React + TypeScript |
 | 题库 API | Vite 中间件（`server/questionsApi.mjs`）读写 `data/questions.json` |
-| 大模型 | OpenAI 兼容 Chat Completions，`stream: true` |
-| 配置 | `.env`：`VITE_LLM_BASE_URL` / `VITE_LLM_API_KEY` / `VITE_LLM_MODEL` |
+| 大模型 | OpenAI 兼容 Chat Completions，`stream: true`；经 `/api/llm` 代理 |
+| 配置 | 界面多模型（localStorage）+ 可选 `.env` 种子 |
 
-支持 DeepSeek、OpenAI 或任意兼容代理：换链接与 Key 即可。
+支持 DeepSeek、OpenAI、内网 vLLM 或任意兼容代理：在答题页添加并切换即可。
 
 ---
 

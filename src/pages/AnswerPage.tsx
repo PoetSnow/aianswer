@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { isLlmConfigured, llmConfig } from '../config'
+import ModelSwitcher from '../components/ModelSwitcher'
+import { getLlmConfig, isLlmConfigured, tutorLimits } from '../config'
 import {
   LlmNotConfiguredError,
   streamChatCompletion,
@@ -12,151 +13,50 @@ import {
   loadWrongBookIds,
   saveWrongBookIds,
 } from '../lib/storage'
-import type { ChoiceKey, Question } from '../types'
+import {
+  STAGE_LABELS,
+  baseSystemPrompt,
+  buildCorrectPrompt,
+  buildGuideSpeakPrompt,
+  buildGuideTurnPrompt,
+  buildNarrationPrompt,
+  buildReportPrompt,
+  buildRevealPrompt,
+  clampGuideTurnResult,
+  fallbackGuideSpeak,
+  fallbackGuideTurn,
+  getGuidePlan,
+  parseGuideTurnResult,
+  type GuideTurnResult,
+  type InteractionMode,
+} from '../lib/tutor'
+import type { ChoiceKey, GuideStep, LlmModelProfile, Question } from '../types'
 import { CHOICE_KEYS } from '../types'
 
-const MAX_GUIDE_ROUNDS = 3
-const OFF_TOPIC_REDIRECT =
-  '我们先专注这一道题哦～请围绕题目的条件、选项或知识点来提问（例如「这一步怎么想」「我不懂」）。'
-
-const STAGE_LABELS = ['对照知识点', '组织引导', '生成回复'] as const
-
-type TutorPhase =
-  | 'idle'
-  | 'explaining'
-  | 'correct_done'
-  | 'wrong_tutoring'
-  | 'revealed'
+const MAX_GUIDE_TURNS = tutorLimits.maxGuideTurns
 
 interface UiMessage {
   id: string
   role: 'user' | 'assistant'
   content: string
-  /** 模型 reasoning 字段；无则空，UI 用阶段标签代替 */
   reasoning: string
   hadReasoningField: boolean
-  /** 流式时用的阶段标签（无 reasoning 时） */
   stageLabel?: string
   isStreaming?: boolean
+  /** LLM 流式回复才展示思考面板；引导短句不展示 */
+  showThink?: boolean
 }
 
-function questionBlock(question: Question, selected: ChoiceKey): string {
-  const optionLines = CHOICE_KEYS.map((k) => `${k}. ${question.options[k]}`).join('\n')
-  const tags = question.tags.length ? question.tags.join('、') : '（未标注）'
-  const solution = question.solution?.trim() || '（无标准解析，请自行推导完整步骤）'
-  return [
-    `题目：${question.stem}`,
-    optionLines,
-    `学生选择：${selected}`,
-    `正确答案：${question.correctAnswer}`,
-    `知识点标签：${tags}`,
-    `标准解析：${solution}`,
-  ].join('\n')
-}
+type Verdict = 'correct' | 'wrong' | null
 
-function baseSystemPrompt(): string {
-  return [
-    '你是一位耐心的初中数学私教，只用中文讲解当前这道选择题。',
-    '语气温暖鼓励。严禁闲聊、讲笑话、谈天气或与本题无关的话题。',
-    '若学生偏离题目，只简短把话题拉回本题，不要回答闲聊内容。',
-  ].join('')
-}
-
-function buildCorrectPrompt(question: Question, selected: ChoiceKey): string {
-  return [
-    '学生刚刚答对了。请：',
-    '1) 先鼓励肯定；',
-    '2) 给出完整解题思路与最终答案（优先展开「标准解析」，写清步骤）；',
-    '3) 点出知识点。',
-    '',
-    questionBlock(question, selected),
-  ].join('\n')
-}
-
-function buildWrongRoundPrompt(
-  question: Question,
-  selected: ChoiceKey,
-  round: number,
-  studentFollowUp?: string,
-): string {
-  const block = questionBlock(question, selected)
-  const follow = studentFollowUp
-    ? `\n学生本轮补充说：${studentFollowUp}\n`
-    : '\n'
-
-  if (round === 1) {
-    return [
-      '【引导第 1/3 轮】学生刚答错。请：',
-      '1) 肯定尝试；',
-      '2) 点出知识点标签；',
-      '3) 用 1–2 个苏格拉底式问题引导，可给轻微提示；',
-      '4) **严禁**说出正确选项字母或「答案是 X」。',
-      follow,
-      block,
-    ].join('\n')
-  }
-
-  if (round === 2) {
-    return [
-      '【引导第 2/3 轮】学生仍未掌握。请：',
-      '1) 给出更强的思路提示（关键步骤、易错点）；',
-      '2) 仍尽量**不要**直接公布正确选项字母；',
-      '3) 可再提一个引导问题。',
-      follow,
-      block,
-    ].join('\n')
-  }
-
-  return [
-    '【引导第 3/3 轮·最终讲解】请给出完整解析与正确答案（写明正确选项字母），',
-    '步骤清晰，语气鼓励。这是本轮最后一次辅导。',
-    follow,
-    block,
-  ].join('\n')
-}
-
-function buildReportPrompt(wrongQuestions: Question[]): string {
-  const lines = wrongQuestions.map((q, i) => {
-    const tags = q.tags.length ? q.tags.join('、') : '未标注'
-    return `${i + 1}. ${q.stem.slice(0, 60)}…｜标签：${tags}`
-  })
-  return [
-    '请根据学生今日错题的知识点标签，用简洁中文写一份「今日学习诊断报告」。',
-    '要求：指出薄弱知识点、给出 2–3 条复习建议、鼓励收尾。不要逐题公布正确答案。',
-    '只谈学习诊断，不要闲聊。',
-    '',
-    '错题列表：',
-    ...lines,
-  ].join('\n')
-}
-
-/** 轻量离题检测；「不懂」等学习相关不算离题 */
-function isOffTopic(text: string): boolean {
-  const t = text.trim()
-  if (!t) return true
-  if (/不懂|不会|为什么|怎么|思路|选项|题目|知识点|提示|再讲|解析|帮我/.test(t)) {
-    return false
-  }
-  if (
-    /笑话|搞笑|聊天|闲聊|天气|星座|八卦|游戏|唱歌|写诗|你是谁|你叫什么|讲个故事|陪我玩|今天吃什么/.test(
-      t,
-    )
-  ) {
-    return true
-  }
-  // 很短且无数学/题目痕迹
-  if (t.length <= 4 && !/[ABCD选项方程面积周长计算加减乘除]/.test(t)) {
-    return true
-  }
-  return false
-}
 
 function welcomeMessages(): UiMessage[] {
   return [
     {
       id: 'welcome',
       role: 'assistant',
-      content: '你好！选好选项后点「确认」。答错时我会分最多 3 轮引导你；答对会直接讲完整思路。',
+      content:
+        '先做选择题。答对后进入变式验证；变式再对才给解析。原题或变式答错则进入分步引导。',
       reasoning: '',
       hadReasoningField: false,
     },
@@ -168,17 +68,33 @@ export default function AnswerPage() {
   const [index, setIndex] = useState(0)
   const [selected, setSelected] = useState<ChoiceKey | null>(null)
   const [messages, setMessages] = useState<UiMessage[]>(welcomeMessages)
-  const [llmTurns, setLlmTurns] = useState<ChatTurn[]>([])
-  const [phase, setPhase] = useState<TutorPhase>('idle')
-  const [guideRound, setGuideRound] = useState(0)
+  const [mode, setMode] = useState<InteractionMode>('ANSWERING')
+  const [stepIndex, setStepIndex] = useState(0)
+  const [stepMisses, setStepMisses] = useState(0)
+  const [guideTurns, setGuideTurns] = useState(0)
+  const [plan, setPlan] = useState<GuideStep[]>([])
   const [confirmedChoice, setConfirmedChoice] = useState<ChoiceKey | null>(null)
+  const [verdict, setVerdict] = useState<Verdict>(null)
+  const [variantChoice, setVariantChoice] = useState<ChoiceKey | null>(null)
+  const [askMastery, setAskMastery] = useState(false)
+  const [mastered, setMastered] = useState(false)
   const [chatInput, setChatInput] = useState('')
   const [streaming, setStreaming] = useState(false)
   const [wrongIds, setWrongIds] = useState<string[]>(() => loadWrongBookIds())
   const [error, setError] = useState<string | null>(null)
+  const [activeModel, setActiveModel] = useState<LlmModelProfile | null>(() => getLlmConfig())
   const chatEndRef = useRef<HTMLDivElement>(null)
   const abortRef = useRef<AbortController | null>(null)
   const stageTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  const stepIndexRef = useRef(0)
+  const stepMissesRef = useRef(0)
+  const guideTurnsRef = useRef(0)
+  const planRef = useRef<GuideStep[]>([])
+  stepIndexRef.current = stepIndex
+  stepMissesRef.current = stepMisses
+  guideTurnsRef.current = guideTurns
+  planRef.current = plan
 
   useEffect(() => {
     let cancelled = false
@@ -190,7 +106,7 @@ export default function AnswerPage() {
         if (!cancelled) {
           setError(
             err instanceof Error
-              ? `无法加载题库：${err.message}（请确认 npm run dev 已启动，题库来自 data/questions.json）`
+              ? `无法加载题库：${err.message}`
               : '无法加载题库',
           )
         }
@@ -215,9 +131,47 @@ export default function AnswerPage() {
   const current = questions[index]
   const wrongQuestions = questions.filter((q) => wrongIds.includes(q.id))
   const configured = isLlmConfigured()
-  const showNextCta = phase === 'correct_done' || phase === 'revealed'
-  const chatEnabled =
-    phase === 'wrong_tutoring' && guideRound > 0 && guideRound < MAX_GUIDE_ROUNDS && !streaming
+  const modelLabel = activeModel?.name || activeModel?.model || '未选择'
+  const answering = mode === 'ANSWERING'
+  const varianting = mode === 'VARIANT'
+  const guiding = mode === 'GUIDING'
+  const completed = mode === 'COMPLETED'
+  const currentStep = guiding ? plan[stepIndex] : undefined
+  const activeStem =
+    varianting && current?.variant ? current.variant.stem : current?.stem
+  const activeOptions =
+    varianting && current?.variant ? current.variant.options : current?.options
+  const activeSelected = varianting ? variantChoice : selected
+  const canPickChoice = (answering || varianting) && !streaming
+  const canSubmitChoice =
+    (answering || varianting) && Boolean(activeSelected) && !streaming
+
+  async function startGuiding(
+    question: Question,
+    prefaceIntent?: string,
+    studentChoice?: ChoiceKey,
+  ) {
+    const steps = getGuidePlan(question)
+    planRef.current = steps
+    setPlan(steps)
+    stepIndexRef.current = 0
+    setStepIndex(0)
+    stepMissesRef.current = 0
+    setStepMisses(0)
+    guideTurnsRef.current = 0
+    setGuideTurns(0)
+    setAskMastery(false)
+    setMode('GUIDING')
+    const step = steps[0]
+    if (!step) return
+    await speakGuideStep({
+      question,
+      step,
+      tone: 'open',
+      prefaceIntent,
+      studentChoice: studentChoice ?? confirmedChoice ?? undefined,
+    })
+  }
 
   function clearStageTimer() {
     if (stageTimerRef.current) {
@@ -230,18 +184,14 @@ export default function AnswerPage() {
     clearStageTimer()
     let i = 0
     setMessages((prev) =>
-      prev.map((m) =>
-        m.id === assistantId ? { ...m, stageLabel: STAGE_LABELS[0] } : m,
-      ),
+      prev.map((m) => (m.id === assistantId ? { ...m, stageLabel: STAGE_LABELS[0] } : m)),
     )
     stageTimerRef.current = setInterval(() => {
       i = Math.min(i + 1, STAGE_LABELS.length - 1)
       const label = STAGE_LABELS[i]
       setMessages((prev) =>
         prev.map((m) =>
-          m.id === assistantId && !m.hadReasoningField
-            ? { ...m, stageLabel: label }
-            : m,
+          m.id === assistantId && !m.hadReasoningField ? { ...m, stageLabel: label } : m,
         ),
       )
     }, 900)
@@ -251,10 +201,20 @@ export default function AnswerPage() {
     abortRef.current?.abort()
     clearStageTimer()
     setMessages(welcomeMessages())
-    setLlmTurns([])
-    setPhase('idle')
-    setGuideRound(0)
+    setMode('ANSWERING')
+    setStepIndex(0)
+    stepIndexRef.current = 0
+    setStepMisses(0)
+    stepMissesRef.current = 0
+    setGuideTurns(0)
+    guideTurnsRef.current = 0
+    setPlan([])
+    planRef.current = []
     setConfirmedChoice(null)
+    setVerdict(null)
+    setVariantChoice(null)
+    setAskMastery(false)
+    setMastered(false)
     setSelected(null)
     setChatInput('')
     setStreaming(false)
@@ -276,97 +236,257 @@ export default function AnswerPage() {
     goToQuestion(index + 1)
   }
 
-  async function runAssistantTurn(opts: {
-    displayUserText: string | null
-    userForLlm: string
-    systemExtra?: string
-    priorTurns?: ChatTurn[]
-    onDone?: () => void
+  function pushUser(text: string) {
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: crypto.randomUUID(),
+        role: 'user',
+        content: text,
+        reasoning: '',
+        hadReasoningField: false,
+      },
+    ])
+  }
+
+  function pushTeacher(text: string) {
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: crypto.randomUUID(),
+        role: 'assistant',
+        content: text,
+        reasoning: '',
+        hadReasoningField: false,
+        showThink: false,
+      },
+    ])
+  }
+
+  /** LLM 润色引导话术（开场）；步骤意图来自题库，失败时回退题库原文 */
+  async function speakGuideStep(opts: {
+    question: Question
+    step: GuideStep
+    tone: 'open' | 'retry' | 'confused' | 'advance'
+    prefaceIntent?: string
+    studentChoice?: ChoiceKey
+    previousStudentReply?: string
   }) {
+    const fallback = fallbackGuideSpeak({
+      step: opts.step,
+      tone: opts.tone,
+      prefaceIntent: opts.prefaceIntent,
+    })
+
+    if (!isLlmConfigured()) {
+      pushTeacher(fallback)
+      return
+    }
+
+    setStreaming(true)
     setError(null)
     const assistantId = crypto.randomUUID()
-    setMessages((prev) => {
-      const next = [...prev]
-      if (opts.displayUserText) {
-        next.push({
-          id: crypto.randomUUID(),
-          role: 'user',
-          content: opts.displayUserText,
-          reasoning: '',
-          hadReasoningField: false,
-        })
-      }
-      next.push({
+    setMessages((prev) => [
+      ...prev,
+      {
         id: assistantId,
         role: 'assistant',
         content: '',
         reasoning: '',
         hadReasoningField: false,
         isStreaming: true,
+        showThink: false,
+      },
+    ])
+    abortRef.current?.abort()
+    const ac = new AbortController()
+    abortRef.current = ac
+
+    try {
+      const result = await streamChatCompletion(
+        [
+          {
+            role: 'system',
+            content: '你是有耐心的初中数学私教。只输出对学生说的自然语言，有温度，短一些。',
+          },
+          {
+            role: 'user',
+            content: buildGuideSpeakPrompt(opts),
+          },
+        ],
+        (delta) => {
+          if (!delta.content) return
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId
+                ? { ...m, content: m.content + delta.content }
+                : m,
+            ),
+          )
+        },
+        ac.signal,
+      )
+      const cleaned =
+        result.content.replace(/^["「]|["」]$/g, '').trim() || fallback
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantId
+            ? { ...m, content: cleaned, isStreaming: false }
+            : m,
+        ),
+      )
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantId
+            ? { ...m, content: fallback, isStreaming: false }
+            : m,
+        ),
+      )
+    } finally {
+      setStreaming(false)
+    }
+  }
+
+  /** 短旁白：答对/切变式/掌握等，意图固定、措辞 LLM */
+  async function speakNarration(intent: string, fallback: string, extra?: string) {
+    if (!isLlmConfigured()) {
+      pushTeacher(fallback)
+      return
+    }
+    setStreaming(true)
+    setError(null)
+    const assistantId = crypto.randomUUID()
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: assistantId,
+        role: 'assistant',
+        content: '',
+        reasoning: '',
+        hadReasoningField: false,
+        isStreaming: true,
+        showThink: false,
+      },
+    ])
+    abortRef.current?.abort()
+    const ac = new AbortController()
+    abortRef.current = ac
+    try {
+      const result = await streamChatCompletion(
+        [
+          {
+            role: 'system',
+            content: '你是有耐心的初中数学私教。只输出对学生说的自然语言，有温度，一两句即可。',
+          },
+          {
+            role: 'user',
+            content: buildNarrationPrompt({
+              intent,
+              questionStem: current?.stem,
+              extra,
+            }),
+          },
+        ],
+        (delta) => {
+          if (!delta.content) return
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId
+                ? { ...m, content: m.content + delta.content }
+                : m,
+            ),
+          )
+        },
+        ac.signal,
+      )
+      const cleaned =
+        result.content.replace(/^["「]|["」]$/g, '').trim() || fallback
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantId ? { ...m, content: cleaned, isStreaming: false } : m,
+        ),
+      )
+    } catch {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantId ? { ...m, content: fallback, isStreaming: false } : m,
+        ),
+      )
+    } finally {
+      setStreaming(false)
+    }
+  }
+
+  async function runStreamText(opts: {
+    userForLlm: string
+    systemExtra?: string
+  }) {
+    setError(null)
+    const assistantId = crypto.randomUUID()
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: assistantId,
+        role: 'assistant',
+        content: '',
+        reasoning: '',
+        hadReasoningField: false,
+        isStreaming: true,
+        showThink: true,
         stageLabel: STAGE_LABELS[0],
-      })
-      return next
-    })
+      },
+    ])
     setStreaming(true)
     startStageTicker(assistantId)
-
     abortRef.current?.abort()
-    const controller = new AbortController()
-    abortRef.current = controller
+    const ac = new AbortController()
+    abortRef.current = ac
 
-    const baseTurns: ChatTurn[] = [
+    const messagesForApi: ChatTurn[] = [
       {
         role: 'system',
-        content: baseSystemPrompt() + (opts.systemExtra ? ` ${opts.systemExtra}` : ''),
+        content: `${baseSystemPrompt()}${opts.systemExtra ? ` ${opts.systemExtra}` : ''}`,
       },
-      ...(opts.priorTurns ?? []),
       { role: 'user', content: opts.userForLlm },
     ]
 
     try {
       const result = await streamChatCompletion(
-        baseTurns,
+        messagesForApi,
         (delta) => {
           setMessages((prev) =>
             prev.map((m) => {
               if (m.id !== assistantId) return m
-              const next = { ...m }
-              if (delta.reasoning) {
-                next.hadReasoningField = true
-                next.reasoning += delta.reasoning
+              // 只更新对学生可见的正文；不把模型 reasoning 展示给学生
+              // （DeepSeek 等常把「如何满足提示词」写进 reasoning，语义怪异）
+              return {
+                ...m,
+                content: delta.content ? m.content + delta.content : m.content,
               }
-              if (delta.content) {
-                next.content += delta.content
-              }
-              return next
             }),
           )
         },
-        controller.signal,
+        ac.signal,
       )
-
       clearStageTimer()
       setMessages((prev) =>
         prev.map((m) =>
           m.id === assistantId
             ? {
                 ...m,
+                content: result.content.trim() || m.content || '（模型未返回正文）',
+                reasoning: '',
+                hadReasoningField: false,
                 isStreaming: false,
-                hadReasoningField: result.hadReasoningField || m.hadReasoningField,
-                reasoning: result.reasoning || m.reasoning,
-                content: result.content || m.content || '（模型未返回正文）',
-                stageLabel: result.hadReasoningField ? undefined : STAGE_LABELS[2],
+                // 生成结束后收起阶段条，避免像「假思考」
+                showThink: false,
+                stageLabel: undefined,
               }
             : m,
         ),
       )
-
-      setLlmTurns([
-        ...(opts.priorTurns ?? []),
-        { role: 'user', content: opts.userForLlm },
-        { role: 'assistant', content: result.content },
-      ])
-      opts.onDone?.()
     } catch (err) {
       clearStageTimer()
       if (err instanceof DOMException && err.name === 'AbortError') return
@@ -380,13 +500,7 @@ export default function AnswerPage() {
       setMessages((prev) =>
         prev.map((m) =>
           m.id === assistantId
-            ? {
-                ...m,
-                isStreaming: false,
-                content:
-                  m.content ||
-                  `（未能完成流式回复）\n${text}\n请检查 .env 中的 VITE_LLM_* 后重启 npm run dev。`,
-              }
+            ? { ...m, isStreaming: false, showThink: true, content: m.content || `（失败）${text}` }
             : m,
         ),
       )
@@ -396,79 +510,269 @@ export default function AnswerPage() {
     }
   }
 
-  async function handleConfirm() {
-    if (!current || !selected || streaming) return
-    if (phase !== 'idle') return
+  async function emitExplanation(
+    question: Question,
+    choice: ChoiceKey,
+    opts: {
+      afterHints?: boolean
+      afterVariant?: boolean
+      variantAnswer?: ChoiceKey
+    } = {},
+  ) {
+    setMode('COMPLETED')
+    await runStreamText({
+      userForLlm: buildCorrectPrompt({
+        question,
+        studentAnswer: choice,
+        afterHints: Boolean(opts.afterHints),
+        afterVariant: Boolean(opts.afterVariant),
+        variantAnswer: opts.variantAnswer,
+      }),
+    })
+    setAskMastery(true)
+    await speakNarration(
+      '解析已经给完，温柔地问学生这道题的方法是否掌握了；可提示点「我掌握了」或「还不太懂」。',
+      '这道题的方法你掌握了吗？',
+    )
+  }
 
+  async function emitReveal(question: Question, choice: ChoiceKey) {
+    setMode('COMPLETED')
+    await runStreamText({
+      userForLlm: buildRevealPrompt({ question, studentAnswer: choice }),
+    })
+    setAskMastery(true)
+    await speakNarration(
+      '解析看完了，若还不清楚可以选「还不太懂」再走引导；掌握了就点「我掌握了」。',
+      '先看完解析。若仍不清楚，可选「还不太懂」再走一遍引导。',
+    )
+  }
+
+  /** 原题选择题 */
+  async function handleSubmitChoice() {
+    if (!current || !selected || streaming || !answering) return
     const choice = selected
-    const isCorrect = choice === current.correctAnswer
     setConfirmedChoice(choice)
+    pushUser(`我选了 ${choice}。`)
 
-    if (!isCorrect) {
-      const nextWrong = addToWrongBook(current.id)
-      setWrongIds(nextWrong)
-      setPhase('wrong_tutoring')
-      setGuideRound(1)
-      await runAssistantTurn({
-        displayUserText: `我选了 ${choice}，好像不太对，能引导我一下吗？`,
-        userForLlm: buildWrongRoundPrompt(current, choice, 1),
-        systemExtra: '第1轮：禁止公布正确选项字母。只谈本题。',
-        priorTurns: [],
+    if (choice === current.correctAnswer) {
+      setVerdict('correct')
+      if (current.variant) {
+        await speakNarration(
+          '原题答对了，热情肯定，并说明接下来做一道变式题检验是否真掌握；不要开始讲完整解析。',
+          '✅ 原题正确！再做一道变式，检验是否真的掌握。',
+        )
+        setVariantChoice(null)
+        setMode('VARIANT')
+        return
+      }
+      await speakNarration(
+        '答对了，简短肯定，并说明下面给出简洁解析。',
+        '✅ 回答正确！下面给出简洁解析。',
+      )
+      await emitExplanation(current, choice, {})
+      return
+    }
+
+    setVerdict('wrong')
+    setWrongIds(addToWrongBook(current.id))
+    await startGuiding(
+      current,
+      '学生刚选错了，不要公布答案，温柔地开始第一步引导',
+      choice,
+    )
+  }
+
+  /** 变式验证 */
+  async function handleSubmitVariant() {
+    if (!current?.variant || !variantChoice || streaming || !varianting) return
+    const choice = variantChoice
+    pushUser(`变式我选了 ${choice}。`)
+
+    if (choice === current.variant.correctAnswer) {
+      setVerdict('correct')
+      await speakNarration(
+        '变式也做对了，说明方法比较扎实，简短肯定并说明下面给出解析。',
+        '✅ 变式也做对了！说明方法比较扎实，下面给出解析。',
+      )
+      await emitExplanation(current, confirmedChoice ?? current.correctAnswer, {
+        afterVariant: true,
+        variantAnswer: choice,
       })
       return
     }
 
-    setPhase('explaining')
-    await runAssistantTurn({
-      displayUserText: `我选了 ${choice}，请讲完整解题思路和答案。`,
-      userForLlm: buildCorrectPrompt(current, choice),
-      systemExtra: '学生答对：鼓励并给出完整思路与答案。',
-      priorTurns: [],
-    })
-    setPhase('correct_done')
+    setVerdict('wrong')
+    setWrongIds(addToWrongBook(current.id))
+    await startGuiding(
+      current,
+      '变式没做对，说明方法还不稳，温柔地回到分步引导，不要公布答案',
+      confirmedChoice ?? undefined,
+    )
   }
 
-  async function handleChatSend() {
-    if (!current || !confirmedChoice || !chatEnabled) return
+  async function handleMastered() {
+    setAskMastery(false)
+    setMastered(true)
+    await speakNarration('学生表示掌握了，简短鼓励，可以说可以进入下一题。', '很好，可以进入下一题了。')
+  }
+
+  function handleNotMastered() {
+    if (!current) return
+    setAskMastery(false)
+    setMastered(false)
+    setVerdict('wrong')
+    void startGuiding(current, '学生说还不太懂，温柔地再带一遍关键步骤')
+  }
+
+  /** 通道 B：LLM 结构化 assessment 推进；解析失败才走本地兜底 */
+  async function handleGuideSend() {
+    if (!current || !confirmedChoice || !guiding || streaming) return
     const text = chatInput.trim()
     if (!text) return
 
-    if (isOffTopic(text)) {
-      setChatInput('')
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: crypto.randomUUID(),
-          role: 'user',
-          content: text,
-          reasoning: '',
-          hadReasoningField: false,
-        },
-        {
-          id: crypto.randomUUID(),
-          role: 'assistant',
-          content: OFF_TOPIC_REDIRECT,
-          reasoning: '',
-          hadReasoningField: false,
-        },
-      ])
+    setChatInput('')
+    pushUser(text)
+
+    const steps = planRef.current
+    const idx = stepIndexRef.current
+    const step = steps[idx]
+    if (!step) {
+      await emitReveal(current, confirmedChoice)
       return
     }
 
-    const nextRound = guideRound + 1
-    setChatInput('')
-    setGuideRound(nextRound)
+    const turns = guideTurnsRef.current + 1
+    guideTurnsRef.current = turns
+    setGuideTurns(turns)
 
-    const isFinal = nextRound >= MAX_GUIDE_ROUNDS
-    await runAssistantTurn({
-      displayUserText: text,
-      userForLlm: buildWrongRoundPrompt(current, confirmedChoice, nextRound, text),
-      systemExtra: isFinal
-        ? '第3轮最终讲解：必须给出完整解析与正确选项。'
-        : `第${nextRound}轮：尽量不公布正确选项字母。只谈本题。`,
-      priorTurns: llmTurns,
-    })
-    if (isFinal) setPhase('revealed')
+    const isLastStep = idx >= steps.length - 1
+    const nextStep = !isLastStep ? steps[idx + 1] : undefined
+    const clampOpts = {
+      isLastStep,
+      turnsUsed: turns,
+      maxTurns: MAX_GUIDE_TURNS,
+    }
+
+    const localFallback = () =>
+      clampGuideTurnResult(
+        fallbackGuideTurn({
+          studentMessage: text,
+          step,
+          nextStep,
+          isLastStep,
+          turnsUsed: turns,
+          maxTurns: MAX_GUIDE_TURNS,
+        }),
+        clampOpts,
+      )
+
+    let result: GuideTurnResult = localFallback()
+
+    setStreaming(true)
+    setError(null)
+    const assistantId = crypto.randomUUID()
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: assistantId,
+        role: 'assistant',
+        content: '',
+        reasoning: '',
+        hadReasoningField: false,
+        isStreaming: true,
+        showThink: false,
+      },
+    ])
+    abortRef.current?.abort()
+    const ac = new AbortController()
+    abortRef.current = ac
+
+    try {
+      if (isLlmConfigured()) {
+        const streamResult = await streamChatCompletion(
+          [
+            {
+              role: 'system',
+              content:
+                '你是初中数学私教。只输出一个 JSON 对象，字段：assessment、shouldAdvance、shouldComplete、shouldReveal、message。',
+            },
+            {
+              role: 'user',
+              content: buildGuideTurnPrompt({
+                question: current,
+                step,
+                stepIndex: idx,
+                totalSteps: steps.length,
+                nextStep,
+                studentChoice: confirmedChoice,
+                studentMessage: text,
+                guideTurnsUsed: turns,
+                maxGuideTurns: MAX_GUIDE_TURNS,
+              }),
+            },
+          ],
+          (delta) => {
+            if (!delta.content) return
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantId
+                  ? { ...m, content: m.content + delta.content }
+                  : m,
+              ),
+            )
+          },
+          ac.signal,
+        )
+        const raw = streamResult.content
+        const parsed = parseGuideTurnResult(raw)
+        result = parsed
+          ? clampGuideTurnResult(parsed, clampOpts)
+          : localFallback()
+      }
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        setStreaming(false)
+        return
+      }
+      result = localFallback()
+    } finally {
+      setStreaming(false)
+    }
+
+    // 流式阶段可能先打出 JSON；结束后只保留对学生说的 message
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.id === assistantId
+          ? { ...m, content: result.message, isStreaming: false }
+          : m,
+      ),
+    )
+
+    if (result.assessment === 'wrong' || result.assessment === 'confused') {
+      const misses = stepMissesRef.current + 1
+      stepMissesRef.current = misses
+      setStepMisses(misses)
+    } else if (result.assessment === 'correct') {
+      stepMissesRef.current = 0
+      setStepMisses(0)
+    }
+
+    if (result.shouldReveal) {
+      await emitReveal(current, confirmedChoice)
+      return
+    }
+    if (result.shouldComplete) {
+      await emitExplanation(current, confirmedChoice, { afterHints: true })
+      return
+    }
+    if (result.shouldAdvance) {
+      const next = idx + 1
+      if (next < steps.length) {
+        stepIndexRef.current = next
+        setStepIndex(next)
+      }
+    }
   }
 
   async function handleTodayReport() {
@@ -477,11 +781,9 @@ export default function AnswerPage() {
       setError('错题本为空，先做错几道再生成报告。')
       return
     }
-    await runAssistantTurn({
-      displayUserText: '请根据我的错题本生成今日学习诊断报告。',
+    await runStreamText({
       userForLlm: buildReportPrompt(wrongQuestions),
-      systemExtra: '只写学习诊断报告，勿闲聊。',
-      priorTurns: [],
+      systemExtra: '只写学习诊断报告。',
     })
   }
 
@@ -507,9 +809,20 @@ export default function AnswerPage() {
           <p className="brand">智学数学</p>
           <h1>答题辅导</h1>
           <p className="subtitle">
-            模型：{llmConfig.model}
-            {configured ? ' · API 已配置' : ' · 未配置 API Key'}
+            当前：{modelLabel}
+            {configured
+              ? activeModel?.apiKey
+                ? ' · Key 已填'
+                : ' · 无 Key（本地可用）'
+              : ' · 未就绪'}
           </p>
+          <ModelSwitcher
+            disabled={streaming}
+            onChange={(p) => {
+              setActiveModel(p)
+              setError(null)
+            }}
+          />
         </div>
         <nav className="nav-links">
           <Link to="/">← 题库</Link>
@@ -526,8 +839,7 @@ export default function AnswerPage() {
 
       {!configured && (
         <div className="banner warn">
-          尚未配置 LLM。复制 <code>.env.example</code> 为 <code>.env</code>，填写{' '}
-          <code>VITE_LLM_API_KEY</code> 等后重启开发服务器。
+          解析需要模型：请在上方配置 DeepSeek 等（引导步骤本身不依赖模型判题）。
         </div>
       )}
       {error && (
@@ -565,8 +877,11 @@ export default function AnswerPage() {
             </div>
           </div>
 
-          <p className="stem">{current.stem}</p>
-          {current.tags.length > 0 && (
+          <p className="stem">
+            {varianting ? <span className="tag">变式验证</span> : null}{' '}
+            {activeStem}
+          </p>
+          {!varianting && current.tags.length > 0 && (
             <p className="tags">
               知识点：
               {current.tags.map((t) => (
@@ -577,101 +892,122 @@ export default function AnswerPage() {
             </p>
           )}
 
-          <div className="choice-list" role="radiogroup" aria-label="选项">
+          <div
+            className={`choice-list ${guiding || completed ? 'choice-list-dimmed' : ''}`}
+            role="radiogroup"
+            aria-label={varianting ? '变式选项' : '选项'}
+          >
             {CHOICE_KEYS.map((key) => (
               <label
                 key={key}
-                className={`choice ${selected === key ? 'selected' : ''}`}
+                className={`choice ${activeSelected === key ? 'selected' : ''}`}
               >
                 <input
                   type="radio"
                   name="choice"
                   value={key}
-                  checked={selected === key}
-                  disabled={phase !== 'idle' || streaming}
-                  onChange={() => setSelected(key)}
+                  checked={activeSelected === key}
+                  disabled={!canPickChoice}
+                  onChange={() =>
+                    varianting ? setVariantChoice(key) : setSelected(key)
+                  }
                 />
                 <span className="choice-key">{key}</span>
-                <span>{current.options[key]}</span>
+                <span>{activeOptions?.[key]}</span>
               </label>
             ))}
           </div>
 
-          <button
-            type="button"
-            className="primary"
-            disabled={!selected || streaming || phase !== 'idle'}
-            onClick={() => void handleConfirm()}
-          >
-            {phase === 'idle' ? (streaming ? '辅导生成中…' : '确认作答') : '已确认'}
-          </button>
-
-          {phase === 'wrong_tutoring' && (
-            <p className="round-badge" aria-live="polite">
-              引导 {Math.min(guideRound, MAX_GUIDE_ROUNDS)}/{MAX_GUIDE_ROUNDS}
-              {guideRound < MAX_GUIDE_ROUNDS
-                ? ' · 可在右侧继续提问（「不懂」也会消耗轮次）'
-                : ''}
+          {answering && (
+            <>
+              <button
+                type="button"
+                className="primary"
+                disabled={!canSubmitChoice}
+                onClick={() => void handleSubmitChoice()}
+              >
+                {streaming ? '生成中…' : '确认作答'}
+              </button>
+              <p className="round-badge">原题 · 选择题</p>
+            </>
+          )}
+          {varianting && (
+            <>
+              <button
+                type="button"
+                className="primary"
+                disabled={!canSubmitChoice}
+                onClick={() => void handleSubmitVariant()}
+              >
+                {streaming ? '生成中…' : '确认变式'}
+              </button>
+              <p className="round-badge">变式验证 · 答对再给解析，答错进引导</p>
+            </>
+          )}
+          {verdict === 'correct' && !varianting && (
+            <p className="round-badge verdict-ok" aria-live="polite">
+              ✅ 回答正确
+              {confirmedChoice ? ` · 原题选 ${confirmedChoice}` : ''}
+              {variantChoice ? ` · 变式选 ${variantChoice}` : ''}
             </p>
           )}
-          {phase === 'revealed' && (
-            <p className="round-badge done">引导已结束 · 见完整解析</p>
+          {verdict === 'wrong' && (
+            <p className="round-badge verdict-bad" aria-live="polite">
+              ❌ 未通过
+              {guiding ? ' · 进入引导' : ''}
+            </p>
           )}
-          {phase === 'correct_done' && (
-            <p className="round-badge done">答对 · 完整思路已给出</p>
+          {guiding && currentStep && (
+            <p className="round-badge" aria-live="polite">
+              分步引导 · 步骤 {stepIndex + 1}/{plan.length}
+              {stepMisses > 0 ? ` · 本步已错 ${stepMisses}` : ''}
+              {` · 引导 ${guideTurns}/${MAX_GUIDE_TURNS}`}
+            </p>
+          )}
+          {completed && mastered && (
+            <p className="round-badge done">已掌握 · 可下一题</p>
+          )}
+          {completed && !mastered && !askMastery && (
+            <p className="round-badge done">本题已完成 · 见右侧解析</p>
           )}
         </section>
 
         <section className="panel chat-pane">
           <div className="row between">
-            <h2>AI 辅导</h2>
-            {phase === 'wrong_tutoring' && (
-              <span className="round-pill">
-                引导 {Math.min(guideRound, MAX_GUIDE_ROUNDS)}/{MAX_GUIDE_ROUNDS}
-              </span>
-            )}
+            <h2>{guiding ? '老师引导' : 'AI 辅导'}</h2>
+            <span className="round-pill">{mode}</span>
           </div>
 
           <div className="chat-log">
             {messages.map((m) => (
               <div key={m.id} className={`bubble ${m.role}`}>
-                <div className="bubble-role">{m.role === 'user' ? '你' : '老师'}</div>
-                {m.role === 'assistant' && m.id !== 'welcome' && (
-                  <details className="think-panel" open={Boolean(m.isStreaming)}>
-                    <summary>思考过程</summary>
+                {m.role === 'assistant' && m.id !== 'welcome' && m.showThink && m.isStreaming && (
+                  <details className="think-panel" open>
+                    <summary>生成中</summary>
                     <div className="think-body">
-                      {m.hadReasoningField || m.reasoning ? (
-                        m.reasoning || (m.isStreaming ? '…' : '（无）')
-                      ) : m.isStreaming || m.stageLabel ? (
-                        <ul className="stage-list">
-                          {STAGE_LABELS.map((label, idx) => {
-                            const activeIdx = Math.max(
-                              0,
-                              STAGE_LABELS.indexOf(
-                                (m.stageLabel as (typeof STAGE_LABELS)[number]) ??
-                                  STAGE_LABELS[0],
-                              ),
-                            )
-                            const cls =
-                              idx === activeIdx ? 'active' : idx < activeIdx ? 'done' : ''
-                            return (
-                              <li key={label} className={cls}>
-                                {label}
-                                {idx === activeIdx && m.isStreaming ? ' …' : ''}
-                              </li>
-                            )
-                          })}
-                        </ul>
-                      ) : (
-                        <span className="muted">本模型未返回思考字段</span>
-                      )}
+                      <ul className="stage-list">
+                        {STAGE_LABELS.map((label, idx) => {
+                          const activeIdx = Math.max(
+                            0,
+                            STAGE_LABELS.indexOf(
+                              (m.stageLabel as (typeof STAGE_LABELS)[number]) ??
+                                STAGE_LABELS[0],
+                            ),
+                          )
+                          const cls =
+                            idx === activeIdx ? 'active' : idx < activeIdx ? 'done' : ''
+                          return (
+                            <li key={label} className={cls}>
+                              {label}
+                              {idx === activeIdx ? ' …' : ''}
+                            </li>
+                          )
+                        })}
+                      </ul>
                     </div>
                   </details>
                 )}
                 <div className="bubble-body">
-                  {m.role === 'assistant' && m.id !== 'welcome' && (
-                    <div className="reply-label">对学生说的话</div>
-                  )}
                   {m.content || (m.isStreaming ? '…' : '')}
                 </div>
               </div>
@@ -679,7 +1015,18 @@ export default function AnswerPage() {
             <div ref={chatEndRef} />
           </div>
 
-          {showNextCta && (
+          {completed && askMastery && !streaming && (
+            <div className="mastery-row">
+              <button type="button" className="primary" onClick={() => void handleMastered()}>
+                我掌握了
+              </button>
+              <button type="button" className="ghost" onClick={handleNotMastered}>
+                还不太懂
+              </button>
+            </div>
+          )}
+
+          {completed && mastered && (
             <button
               type="button"
               className="next-cta"
@@ -690,29 +1037,47 @@ export default function AnswerPage() {
             </button>
           )}
 
-          {chatEnabled && (
+          {completed && !askMastery && !mastered && (
+            <button
+              type="button"
+              className="next-cta"
+              disabled={streaming}
+              onClick={handleNextQuestion}
+            >
+              下一题 →
+            </button>
+          )}
+
+          {guiding && !streaming && (
             <form
               className="chat-input-row"
               onSubmit={(e) => {
                 e.preventDefault()
-                void handleChatSend()
+                void handleGuideSend()
               }}
             >
               <input
                 value={chatInput}
                 onChange={(e) => setChatInput(e.target.value)}
-                placeholder="围绕本题提问，或说「不懂」…"
-                disabled={streaming}
-                aria-label="辅导对话输入"
+                placeholder="回答当前步骤，例如 8；不懂就说「不懂」"
+                aria-label="引导回答"
+                autoFocus
               />
-              <button type="submit" className="primary" disabled={streaming || !chatInput.trim()}>
+              <button type="submit" className="primary" disabled={!chatInput.trim()}>
                 发送
               </button>
             </form>
           )}
 
-          {phase === 'wrong_tutoring' && guideRound >= MAX_GUIDE_ROUNDS && !showNextCta && (
-            <p className="muted">正在生成最终解析…</p>
+          {answering && (
+            <p className="muted" style={{ marginTop: '0.75rem' }}>
+              答对 → 变式验证；变式再对 → 解析 → 确认是否掌握。答错或变式错 → 分步引导。
+            </p>
+          )}
+          {varianting && (
+            <p className="muted" style={{ marginTop: '0.75rem' }}>
+              这是变式题：换了数字/表述，考同一方法。
+            </p>
           )}
         </section>
       </div>

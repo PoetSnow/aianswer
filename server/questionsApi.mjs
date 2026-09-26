@@ -39,6 +39,79 @@ export function validateQuestions(raw) {
     if (q.solution != null && typeof q.solution !== 'string') {
       throw new Error(`第 ${i + 1} 题 solution 须为字符串`)
     }
+
+    let guideSteps
+    if (q.guideSteps != null) {
+      if (!Array.isArray(q.guideSteps) || q.guideSteps.length === 0) {
+        throw new Error(`第 ${i + 1} 题 guideSteps 须为非空数组`)
+      }
+      guideSteps = q.guideSteps.map((s, j) => {
+        if (!s || typeof s !== 'object') {
+          throw new Error(`第 ${i + 1} 题 guideSteps[${j}] 无效`)
+        }
+        if (typeof s.ask !== 'string' || !s.ask.trim()) {
+          throw new Error(`第 ${i + 1} 题 guideSteps[${j}] 缺少 ask`)
+        }
+        if (s.expectedAnswers != null) {
+          if (
+            !Array.isArray(s.expectedAnswers) ||
+            !s.expectedAnswers.every((a) => typeof a === 'string')
+          ) {
+            throw new Error(`第 ${i + 1} 题 guideSteps[${j}].expectedAnswers 须为字符串数组`)
+          }
+        }
+        return {
+          id: typeof s.id === 'string' && s.id ? s.id : `step-${j + 1}`,
+          ask: s.ask.trim(),
+          ...(Array.isArray(s.expectedAnswers) && s.expectedAnswers.length > 0
+            ? {
+                expectedAnswers: s.expectedAnswers
+                  .map((a) => String(a).trim())
+                  .filter(Boolean),
+              }
+            : {}),
+          ...(typeof s.hintAsk === 'string' && s.hintAsk.trim()
+            ? { hintAsk: s.hintAsk.trim() }
+            : {}),
+        }
+      })
+    }
+
+    let variant
+    if (q.variant != null) {
+      const v = q.variant
+      if (!v || typeof v !== 'object') {
+        throw new Error(`第 ${i + 1} 题 variant 无效`)
+      }
+      if (typeof v.stem !== 'string' || !v.stem.trim()) {
+        throw new Error(`第 ${i + 1} 题 variant 缺少 stem`)
+      }
+      if (!v.options || typeof v.options !== 'object') {
+        throw new Error(`第 ${i + 1} 题 variant 缺少 options`)
+      }
+      for (const k of CHOICES) {
+        if (typeof v.options[k] !== 'string') {
+          throw new Error(`第 ${i + 1} 题 variant 缺少选项 ${k}`)
+        }
+      }
+      if (!CHOICES.includes(v.correctAnswer)) {
+        throw new Error(`第 ${i + 1} 题 variant.correctAnswer 须为 A/B/C/D`)
+      }
+      variant = {
+        stem: v.stem.trim(),
+        options: {
+          A: v.options.A,
+          B: v.options.B,
+          C: v.options.C,
+          D: v.options.D,
+        },
+        correctAnswer: v.correctAnswer,
+        ...(typeof v.solution === 'string' && v.solution.trim()
+          ? { solution: v.solution.trim() }
+          : {}),
+      }
+    }
+
     return {
       id: typeof q.id === 'string' && q.id ? q.id : crypto.randomUUID(),
       stem: q.stem.trim(),
@@ -53,6 +126,8 @@ export function validateQuestions(raw) {
       ...(q.solution != null && q.solution !== ''
         ? { solution: q.solution }
         : {}),
+      ...(guideSteps ? { guideSteps } : {}),
+      ...(variant ? { variant } : {}),
     }
   })
 }

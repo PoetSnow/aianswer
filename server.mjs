@@ -5,17 +5,21 @@
  *   node server.mjs
  */
 import http from 'node:http'
+import { llmProxyMiddleware } from './server/llmProxy.mjs'
 import { questionsApiMiddleware } from './server/questionsApi.mjs'
 
 const PORT = Number(process.env.API_PORT || 5174)
 
 const server = http.createServer((req, res) => {
   questionsApiMiddleware(req, res, () => {
-    res.statusCode = 404
-    res.end('Not Found')
+    llmProxyMiddleware(req, res, () => {
+      res.statusCode = 404
+      res.end('Not Found')
+    })
   })
 })
 
 server.listen(PORT, () => {
-  console.log(`[questions-api] http://127.0.0.1:${PORT}/api/questions`)
+  console.log(`[api] http://127.0.0.1:${PORT}/api/questions`)
+  console.log(`[api] http://127.0.0.1:${PORT}/api/llm/chat/completions`)
 })

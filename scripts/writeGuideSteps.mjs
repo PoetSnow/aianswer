@@ -1,0 +1,395 @@
+/**
+ * 一次性写入带 guideSteps 的题库（程序拥有期望答案）。
+ * node scripts/writeGuideSteps.mjs
+ */
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+const file = path.join(root, 'data/questions.json')
+
+const questions = [
+  {
+    id: 'seed-1',
+    stem: '若方程 2x + 3 = 11，则 x 的值是？',
+    options: { A: '2', B: '4', C: '5', D: '7' },
+    correctAnswer: 'B',
+    tags: ['一元一次方程', '解方程'],
+    solution: '移项得 2x = 11 - 3 = 8，两边同除以 2 得 x = 4。因此选 B。',
+    guideSteps: [
+      {
+        id: 'mid',
+        ask: '先别求 x。方程两边同时减去 3 后，2x 等于多少？',
+        expectedAnswers: ['8', '2x=8', '2x = 8'],
+        hintAsk: '更简单：11 减 3 等于多少？',
+      },
+      {
+        id: 'final',
+        ask: '对，2x = 8。两边再同时除以 2，x 等于多少？',
+        expectedAnswers: ['4', 'x=4', 'x = 4', 'B'],
+        hintAsk: '8 除以 2 等于多少？',
+      },
+    ],
+  },
+  {
+    id: 'seed-2',
+    stem: '一个正方形的周长是 20 cm，则它的面积是？',
+    options: { A: '16 cm²', B: '20 cm²', C: '25 cm²', D: '100 cm²' },
+    correctAnswer: 'C',
+    tags: ['正方形', '周长与面积'],
+    solution: '正方形周长 = 4 × 边长，故边长 = 20 ÷ 4 = 5 cm；面积 = 5² = 25 cm²。因此选 C。',
+    guideSteps: [
+      {
+        id: 'side',
+        ask: '先别急着求面积。正方形周长 = 4 × 边长，边长是多少 cm？',
+        expectedAnswers: ['5', '5cm', '5 cm'],
+        hintAsk: '更简单：20 ÷ 4 等于多少？',
+      },
+      {
+        id: 'area',
+        ask: '边长是 5 cm。面积 = 边长 × 边长，等于多少？',
+        expectedAnswers: ['25', '25cm²', '25 cm²', 'C'],
+        hintAsk: '5 × 5 等于多少？',
+      },
+    ],
+  },
+  {
+    id: 'seed-3',
+    stem: '计算：(-3)² − 3² 的结果是？',
+    options: { A: '0', B: '9', C: '-9', D: '18' },
+    correctAnswer: 'A',
+    tags: ['有理数运算', '乘方'],
+    solution: '(-3)² = 9，3² = 9，所以 9 − 9 = 0。注意平方与负号的运算顺序。因此选 A。',
+    guideSteps: [
+      {
+        id: 'left',
+        ask: '先算 (-3)²，结果是多少？',
+        expectedAnswers: ['9'],
+        hintAsk: '(-3)×(-3) 等于多少？',
+      },
+      {
+        id: 'final',
+        ask: '(-3)² = 9，3² 也是 9。那么 9 − 9 等于多少？',
+        expectedAnswers: ['0', 'A'],
+        hintAsk: '同一个数减自己，结果是多少？',
+      },
+    ],
+  },
+  {
+    id: 'ext-1',
+    stem: '若方程 3x − 5 = 13，则 x 的值是？',
+    options: { A: '4', B: '5', C: '6', D: '7' },
+    correctAnswer: 'C',
+    tags: ['一元一次方程', '解方程'],
+    solution: '移项得 3x = 13 + 5 = 18，两边同除以 3 得 x = 6。因此选 C。',
+    guideSteps: [
+      {
+        id: 'mid',
+        ask: '两边把 −5 移走后，3x 等于多少？',
+        expectedAnswers: ['18', '3x=18', '3x = 18'],
+        hintAsk: '13 + 5 等于多少？',
+      },
+      {
+        id: 'final',
+        ask: '3x = 18，x 等于多少？',
+        expectedAnswers: ['6', 'x=6', 'C'],
+        hintAsk: '18 ÷ 3 等于多少？',
+      },
+    ],
+  },
+  {
+    id: 'ext-2',
+    stem: '若方程 5x + 2 = 3x + 10，则 x 的值是？',
+    options: { A: '2', B: '3', C: '4', D: '5' },
+    correctAnswer: 'C',
+    tags: ['一元一次方程', '解方程', '移项'],
+    solution: '移项得 5x − 3x = 10 − 2，即 2x = 8，所以 x = 4。因此选 C。',
+    guideSteps: [
+      {
+        id: 'mid',
+        ask: '把含 x 的项移到一边、常数移到另一边后，2x 等于多少？',
+        expectedAnswers: ['8', '2x=8', '2x = 8'],
+        hintAsk: '10 − 2 等于多少？',
+      },
+      {
+        id: 'final',
+        ask: '2x = 8，x 等于多少？',
+        expectedAnswers: ['4', 'x=4', 'C'],
+        hintAsk: '8 ÷ 2 等于多少？',
+      },
+    ],
+  },
+  {
+    id: 'ext-3',
+    stem: '若方程 4(x − 1) = 2x + 6，则 x 的值是？',
+    options: { A: '3', B: '4', C: '5', D: '6' },
+    correctAnswer: 'C',
+    tags: ['一元一次方程', '去括号', '解方程'],
+    solution: '去括号得 4x − 4 = 2x + 6，移项得 2x = 10，所以 x = 5。因此选 C。',
+    guideSteps: [
+      {
+        id: 'mid',
+        ask: '去括号并移项后，2x 等于多少？',
+        expectedAnswers: ['10', '2x=10', '2x = 10'],
+        hintAsk: '6 + 4 等于多少？',
+      },
+      {
+        id: 'final',
+        ask: '2x = 10，x 等于多少？',
+        expectedAnswers: ['5', 'x=5', 'C'],
+        hintAsk: '10 ÷ 2 等于多少？',
+      },
+    ],
+  },
+  {
+    id: 'ext-4',
+    stem: '若方程 x/3 + 2 = 5，则 x 的值是？',
+    options: { A: '6', B: '7', C: '8', D: '9' },
+    correctAnswer: 'D',
+    tags: ['一元一次方程', '解方程', '分数系数'],
+    solution: '移项得 x/3 = 5 − 2 = 3，两边同乘 3 得 x = 9。因此选 D。',
+    guideSteps: [
+      {
+        id: 'mid',
+        ask: '移项后，x/3 等于多少？',
+        expectedAnswers: ['3', 'x/3=3'],
+        hintAsk: '5 − 2 等于多少？',
+      },
+      {
+        id: 'final',
+        ask: 'x/3 = 3，x 等于多少？',
+        expectedAnswers: ['9', 'x=9', 'D'],
+        hintAsk: '3 × 3 等于多少？',
+      },
+    ],
+  },
+  {
+    id: 'ext-5',
+    stem: '一个正方形的面积是 49 cm²，则它的周长是？',
+    options: { A: '14 cm', B: '21 cm', C: '28 cm', D: '49 cm' },
+    correctAnswer: 'C',
+    tags: ['正方形', '周长与面积'],
+    solution: '正方形面积 = 边长²，故边长 = √49 = 7 cm；周长 = 4 × 7 = 28 cm。因此选 C。',
+    guideSteps: [
+      {
+        id: 'side',
+        ask: '面积 49 cm²，边长是多少 cm？',
+        expectedAnswers: ['7', '7cm', '7 cm'],
+        hintAsk: '哪个正数的平方等于 49？',
+      },
+      {
+        id: 'peri',
+        ask: '边长 7 cm，周长 = 4 × 边长，等于多少？',
+        expectedAnswers: ['28', '28cm', '28 cm', 'C'],
+        hintAsk: '4 × 7 等于多少？',
+      },
+    ],
+  },
+  {
+    id: 'ext-6',
+    stem: '一个正方形的边长扩大到原来的 2 倍，则它的面积扩大到原来的多少倍？',
+    options: { A: '2 倍', B: '3 倍', C: '4 倍', D: '8 倍' },
+    correctAnswer: 'C',
+    tags: ['正方形', '面积变化'],
+    solution: '设原边长为 a，则原面积为 a²；新边长为 2a，新面积为 (2a)² = 4a²，所以面积扩大到原来的 4 倍。因此选 C。',
+    guideSteps: [
+      {
+        id: 'final',
+        ask: '边长变成 2 倍，面积变成几倍？（想一想 (2a)² 与 a² 的关系）',
+        expectedAnswers: ['4', '4倍', '4 倍', 'C'],
+        hintAsk: '2 的平方是多少？面积比跟随边长平方变化。',
+      },
+    ],
+  },
+  {
+    id: 'ext-7',
+    stem: '一个正方形的周长是 36 cm，则它的面积是？',
+    options: { A: '36 cm²', B: '64 cm²', C: '81 cm²', D: '144 cm²' },
+    correctAnswer: 'C',
+    tags: ['正方形', '周长与面积'],
+    solution: '边长 = 36 ÷ 4 = 9 cm，面积 = 9² = 81 cm²。因此选 C。',
+    guideSteps: [
+      {
+        id: 'side',
+        ask: '周长 36 cm，边长是多少 cm？',
+        expectedAnswers: ['9', '9cm', '9 cm'],
+        hintAsk: '36 ÷ 4 等于多少？',
+      },
+      {
+        id: 'area',
+        ask: '边长 9 cm，面积是多少？',
+        expectedAnswers: ['81', '81cm²', '81 cm²', 'C'],
+        hintAsk: '9 × 9 等于多少？',
+      },
+    ],
+  },
+  {
+    id: 'ext-8',
+    stem: '计算：(-2)³ − 2³ 的结果是？',
+    options: { A: '0', B: '-16', C: '16', D: '-8' },
+    correctAnswer: 'B',
+    tags: ['有理数运算', '乘方'],
+    solution: '(-2)³ = -8，2³ = 8，所以 -8 − 8 = -16。因此选 B。',
+    guideSteps: [
+      {
+        id: 'left',
+        ask: '先算 (-2)³，结果是多少？',
+        expectedAnswers: ['-8'],
+        hintAsk: '负数的奇次方仍是负：(-2)×(-2)×(-2) =？',
+      },
+      {
+        id: 'final',
+        ask: '(-2)³ = -8，2³ = 8。那么 -8 − 8 等于多少？',
+        expectedAnswers: ['-16', 'B'],
+        hintAsk: '-8 再减去 8，是多少？',
+      },
+    ],
+  },
+  {
+    id: 'ext-9',
+    stem: '计算：(-4)² + (-2)³ 的结果是？',
+    options: { A: '8', B: '10', C: '12', D: '24' },
+    correctAnswer: 'A',
+    tags: ['有理数运算', '乘方'],
+    solution: '(-4)² = 16，(-2)³ = -8，所以 16 + (-8) = 8。因此选 A。',
+    guideSteps: [
+      {
+        id: 'sq',
+        ask: '(-4)² 等于多少？',
+        expectedAnswers: ['16'],
+        hintAsk: '(-4)×(-4) =？',
+      },
+      {
+        id: 'final',
+        ask: '(-4)² = 16，(-2)³ = -8。16 + (-8) 等于多少？',
+        expectedAnswers: ['8', 'A'],
+        hintAsk: '16 − 8 等于多少？',
+      },
+    ],
+  },
+  {
+    id: 'ext-10',
+    stem: '计算：-3² + (-3)² 的结果是？',
+    options: { A: '-18', B: '-9', C: '0', D: '18' },
+    correctAnswer: 'C',
+    tags: ['有理数运算', '乘方'],
+    solution: '-3² = -9，(-3)² = 9，所以 -9 + 9 = 0。因此选 C。',
+    guideSteps: [
+      {
+        id: 'diff',
+        ask: '-3² 和 (-3)² 一样吗？分别等于多少？（先答 -3²）',
+        expectedAnswers: ['-9'],
+        hintAsk: '-3² 是先算 3² 再取负，等于多少？',
+      },
+      {
+        id: 'final',
+        ask: '-3² = -9，(-3)² = 9。相加等于多少？',
+        expectedAnswers: ['0', 'C'],
+        hintAsk: '-9 + 9 等于多少？',
+      },
+    ],
+  },
+  {
+    id: 'ext-11',
+    stem: '计算：(-1)²⁰²⁴ + (-1)²⁰²⁵ 的结果是？',
+    options: { A: '-2', B: '-1', C: '0', D: '2' },
+    correctAnswer: 'C',
+    tags: ['有理数运算', '乘方', '负数的幂'],
+    solution:
+      '(-1) 的偶次幂为 1，奇次幂为 -1。所以 (-1)²⁰²⁴ = 1，(-1)²⁰²⁵ = -1，结果为 1 + (-1) = 0。因此选 C。',
+    guideSteps: [
+      {
+        id: 'even',
+        ask: '(-1) 的偶次幂是多少？',
+        expectedAnswers: ['1'],
+        hintAsk: '(-1)×(-1)=1，偶次个 -1 相乘是？',
+      },
+      {
+        id: 'final',
+        ask: '偶次是 1，奇次是 -1。1 + (-1) 等于多少？',
+        expectedAnswers: ['0', 'C'],
+        hintAsk: '1 − 1 等于多少？',
+      },
+    ],
+  },
+  {
+    id: 'ext-12',
+    stem: '若方程 2x + a = 10 的解是 x = 3，则 a 的值是？',
+    options: { A: '2', B: '3', C: '4', D: '5' },
+    correctAnswer: 'C',
+    tags: ['一元一次方程', '方程的解', '待定系数'],
+    solution: '将 x = 3 代入方程得 2×3 + a = 10，即 6 + a = 10，所以 a = 4。因此选 C。',
+    guideSteps: [
+      {
+        id: 'sub',
+        ask: '把 x = 3 代入后，2×3 + a = 10，也就是 6 + a = 10。a 等于多少？',
+        expectedAnswers: ['4', 'a=4', 'C'],
+        hintAsk: '10 − 6 等于多少？',
+      },
+    ],
+  },
+  {
+    id: 'ext-13',
+    stem: '一个长方形的长是 8 cm，宽是 5 cm，则它的面积是？',
+    options: { A: '13 cm²', B: '26 cm²', C: '40 cm²', D: '80 cm²' },
+    correctAnswer: 'C',
+    tags: ['长方形', '面积'],
+    solution: '长方形面积 = 长 × 宽 = 8 × 5 = 40 cm²。因此选 C。',
+    guideSteps: [
+      {
+        id: 'final',
+        ask: '长方形面积 = 长 × 宽。8 × 5 等于多少？',
+        expectedAnswers: ['40', '40cm²', '40 cm²', 'C'],
+        hintAsk: '8 × 5 是多少？',
+      },
+    ],
+  },
+  {
+    id: 'ext-14',
+    stem: '一个长方形的周长是 30 cm，长是 9 cm，则它的面积是？',
+    options: { A: '45 cm²', B: '54 cm²', C: '63 cm²', D: '72 cm²' },
+    correctAnswer: 'B',
+    tags: ['长方形', '周长与面积'],
+    solution: '长方形周长 = 2(长 + 宽)，所以 30 = 2(9 + 宽)，得 9 + 宽 = 15，宽 = 6 cm；面积 = 9 × 6 = 54 cm²。因此选 B。',
+    guideSteps: [
+      {
+        id: 'width',
+        ask: '周长 30 = 2(长 + 宽)，长是 9。宽是多少 cm？',
+        expectedAnswers: ['6', '6cm', '6 cm'],
+        hintAsk: '30 ÷ 2 = 15，15 − 9 等于多少？',
+      },
+      {
+        id: 'area',
+        ask: '长 9、宽 6，面积是多少？',
+        expectedAnswers: ['54', '54cm²', '54 cm²', 'B'],
+        hintAsk: '9 × 6 等于多少？',
+      },
+    ],
+  },
+  {
+    id: 'ext-15',
+    stem: '若 a = -2，则 a² − 2a + 1 的值是？',
+    options: { A: '1', B: '4', C: '9', D: '16' },
+    correctAnswer: 'C',
+    tags: ['代数式求值', '有理数运算'],
+    solution: '代入 a = -2：a² = 4，-2a = -2×(-2) = 4，所以原式 = 4 + 4 + 1 = 9。因此选 C。',
+    guideSteps: [
+      {
+        id: 'sq',
+        ask: 'a = -2 时，a² 等于多少？',
+        expectedAnswers: ['4'],
+        hintAsk: '(-2)×(-2) =？',
+      },
+      {
+        id: 'final',
+        ask: 'a² = 4，−2a = 4，再加 1。整个式子等于多少？',
+        expectedAnswers: ['9', 'C'],
+        hintAsk: '4 + 4 + 1 等于多少？',
+      },
+    ],
+  },
+]
+
+fs.writeFileSync(file, `${JSON.stringify(questions, null, 2)}\n`, 'utf8')
+console.log(`wrote ${questions.length} questions with guideSteps → ${file}`)
